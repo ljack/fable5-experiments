@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fable 5 Experiments</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    min-height: 100vh;
+    background: #05050f;
+    color: #cfe;
+    font-family: 'Courier New', monospace;
+    display: flex; flex-direction: column;
+    align-items: center;
+    padding: 8vh 20px 40px;
+  }
+  h1 {
+    color: #f0f;
+    text-shadow: 0 0 12px #f0f, 0 0 40px #f0f;
+    letter-spacing: 6px;
+    font-size: clamp(28px, 6vw, 52px);
+    text-align: center;
+    margin-bottom: 10px;
+  }
+  .sub {
+    color: #0ff;
+    text-shadow: 0 0 8px #0ff;
+    margin-bottom: 50px;
+    letter-spacing: 2px;
+    text-align: center;
+  }
+  ul { list-style: none; width: 100%; max-width: 640px; }
+  li { margin-bottom: 18px; }
+  a.card {
+    display: block;
+    padding: 18px 22px;
+    border: 2px solid rgba(0,255,255,0.4);
+    border-radius: 8px;
+    color: #0ff;
+    text-decoration: none;
+    text-shadow: 0 0 6px #0ff;
+    letter-spacing: 2px;
+    transition: all 0.15s;
+    background: rgba(0,255,255,0.04);
+  }
+  a.card:hover {
+    border-color: #f0f;
+    color: #f0f;
+    text-shadow: 0 0 8px #f0f;
+    background: rgba(255,0,255,0.06);
+    transform: translateX(6px);
+  }
+  a.card .desc {
+    display: block;
+    margin-top: 6px;
+    font-size: 13px;
+    color: #89a;
+    text-shadow: none;
+    letter-spacing: 1px;
+  }
+  footer {
+    margin-top: auto;
+    padding-top: 60px;
+    font-size: 13px;
+    color: #567;
+  }
+  footer a { color: #0ff; }
+</style>
+</head>
+<body>
+  <h1>FABLE 5 EXPERIMENTS</h1>
+  <p class="sub">games · utils · whatever</p>
+  <ul>
+    <li>
+      <a class="card" href="asteroids.html">
+        🚀 NEON ASTEROIDS
+        <span class="desc">Classic asteroids with neon glow, particles &amp; synth SFX. Keyboard + touch.</span>
+      </a>
+    </li>
+  </ul>
+  <footer>
+    built with fable 5 · <a href="https://github.com/ljack/fable5-experiments">source on github</a>
+  </footer>
+</body>
+</html>
