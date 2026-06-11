@@ -13,6 +13,12 @@ and voice-synthesized one-liners.
 - **CC0 PBR textures** from [ambientCG](https://ambientcg.com) (7 materials ×
   color/normal/roughness, downscaled to 512px → 1.1 MB total)
 - **Web Audio** procedural SFX + **speechSynthesis** for Duke-style one-liners
+- **AI-generated sprites** (Gemini 2.5 Flash Image aka Nano Banana) for all
+  monsters, the NPC, barrels, wall decals, and the skybox — classic Doom-style
+  Y-axis billboards with idle/walk/attack/die frames
+- **Post-processing**: UnrealBloomPass + film grain/vignette/chromatic-
+  aberration shader pass, PCF soft shadows, MSAA HDR render target
+  (press **P** to toggle low-quality mode)
 - Level defined in a shared `level.js` grid module; `validate.mjs` flood-fills
   it in Node to prove every monster/item/door is reachable from spawn
 - Headless **Playwright** smoke tests: JS-error check, screenshot review, and
@@ -75,3 +81,26 @@ and voice-synthesized one-liners.
   without a human in the loop.
 - CC0 texture pipeline (ambientCG → sips downscale) gives "better graphics"
   fast; PBR normal maps + colored point lights do most of the visual work.
+
+## v2: AI sprites + post-processing
+
+A follow-up session replaced the procedural-geometry monsters/NPC with
+AI-generated sprite billboards and added a post-processing stack.
+
+- **Sprite pipeline**: `tools/nanobanana.sh` (Gemini 2.5 Flash Image, key in
+  git-ignored `.env`) generates magenta-background sprite sheets;
+  `tools/process_sprites.py` splits frames, chroma-keys magenta → alpha,
+  trims, and exports per-frame PNGs (17 assets, ~3.5 MB).
+- **Billboards**: monsters (grunt/spitter/boss × idle/walk/attack/die), the
+  janitor NPC (idle/talk swap while speaking), and exploding barrels are
+  Y-axis-billboarded planes with `alphaTest` cutout.
+- **Lighting fix that mattered**: pre-lit painted sprites went near-black
+  under pure Lambert shading in dark halls — fixed by reusing the sprite map
+  as an `emissiveMap` with intensity ~0.3, so sprites stay readable while
+  still picking up colored room light.
+- **Post stack**: EffectComposer with bloom, grain/vignette/chromatic
+  aberration, soft shadows, and a 4× MSAA half-float render target (the
+  default composer target has no MSAA and shimmered on metal textures).
+  `P` toggles a low-quality mode.
+- Verified again with headless Playwright: screenshot review of every monster
+  type, NPC, decals, and a scripted blaster kill — zero JS errors.
