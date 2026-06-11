@@ -323,14 +323,14 @@ for (const c of crateDefs) {
 // doors
 const doorObjs = [];
 for (const d of doorDefs) {
-  const along = d.axis === 'x' ? 'x' : 'z';
-  const geoW = d.axis === 'x' ? CELL : 0.6;
-  const geoD = d.axis === 'x' ? 0.6 : CELL;
+  // axis = direction of travel THROUGH the door:
+  // thin along the axis, full cell width across it (secret doors fill the whole cell).
+  const geoW = d.secret ? CELL : (d.axis === 'x' ? 0.7 : CELL);
+  const geoD = d.secret ? CELL : (d.axis === 'x' ? CELL : 0.7);
   const mat = d.secret ? matWallA : (d.locked ? matDoor.clone() : matDoor);
   if (d.locked) { mat.emissive = new THREE.Color(0x550000); mat.emissiveIntensity = 0.6; }
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(geoW, WALL_H, geoD), mat);
   mesh.position.set(cx(d.x), WALL_H / 2, cx(d.y));
-  if (d.secret) mesh.scale.set(d.axis === 'x' ? 1 : CELL / 0.6, 1, d.axis === 'x' ? CELL / 0.6 : 1);
   scene.add(mesh);
   const obj = { ...d, mesh, open: 0, opening: false, sealed: false, found: false };
   doorObjs.push(obj);
