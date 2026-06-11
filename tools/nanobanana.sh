@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Generate an image with Nano Banana (Gemini 2.5 Flash Image).
-# Usage: tools/nanobanana.sh "prompt text" output.png [input_image.png]
+# Usage: tools/nanobanana.sh "prompt text" output.png [input_image.png] [aspect_ratio]
+# aspect_ratio: 1:1 (default), 16:9, 21:9, 2:3, etc. Pass "" for input_image to skip.
 # Reads GEMINI_API_KEY from .env in the repo root.
 set -euo pipefail
 
@@ -10,6 +11,7 @@ export $(grep -v '^#' "$ROOT/.env" | xargs)
 PROMPT="$1"
 OUT="$2"
 INPUT_IMG="${3:-}"
+ASPECT="${4:-1:1}"
 
 if [ -n "$INPUT_IMG" ]; then
   MIME=$(file -b --mime-type "$INPUT_IMG")
@@ -20,7 +22,8 @@ else
   PARTS=$(jq -n --arg t "$PROMPT" '[{text:$t}]')
 fi
 
-RESP=$(jq -n --argjson p "$PARTS" '{contents:[{parts:$p}]}' | \
+RESP=$(jq -n --argjson p "$PARTS" --arg ar "$ASPECT" \
+    '{contents:[{parts:$p}],generationConfig:{imageConfig:{aspectRatio:$ar}}}' | \
   curl -s -X POST \
     "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent" \
     -H "x-goog-api-key: $GEMINI_API_KEY" \
