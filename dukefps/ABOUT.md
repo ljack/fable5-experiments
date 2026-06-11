@@ -104,3 +104,26 @@ AI-generated sprite billboards and added a post-processing stack.
   `P` toggles a low-quality mode.
 - Verified again with headless Playwright: screenshot review of every monster
   type, NPC, decals, and a scripted blaster kill — zero JS errors.
+
+## v3: sprite weapons, sprite items, gun-feel VFX
+
+A third session replaced the remaining procedural geometry (pickups, weapon
+viewmodels) with Nano Banana sprites and layered in "gun feel" effects.
+
+- **Viewmodel sprites**: first-person pistol/shotgun/plasma as fullbright
+  billboards (`renderOrder` on top, no depth test) with idle/fire frames —
+  plus a shotgun *pump* frame timed 0.28–0.62 s after firing, with a small
+  dip/roll so the pump reads. Mouse-look sway + walk bob + recoil kick.
+- **Item sprites**: all 8 pickups (gold, treasure, health, shells, cells,
+  keycard, shotgun, plasma) are billboards with additive radial-gradient
+  glow halos that pulse; aspect ratios taken from the processed PNGs.
+- **VFX pass**: hitscan tracers (additive cylinders from the muzzle),
+  muzzle-flash puffs, projectile glow halos + capped point lights (max 6)
+  + trail puffs, impact sparks, scorch decals on walls (capped at 40,
+  fade-out), and ejected brass/shell casings that bounce on the floor.
+- **Env-map gloss**: skybox doubles as `scene.environment` so metal
+  surfaces and brass casings actually reflect (intensity 0.35).
+- `tools/process_viewmodels.py` added for the first-person sprite crops.
+- Verified with `validate.mjs` + headless Playwright: all weapon frames,
+  item sprites, and a scripted plasma grunt-kill screenshot-reviewed
+  against the previous commit — zero JS errors, no visual regressions.

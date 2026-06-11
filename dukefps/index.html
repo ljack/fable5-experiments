@@ -241,6 +241,9 @@ texLoader.load('assets/sprites/skybox.jpg', t => {
   t.mapping = THREE.EquirectangularReflectionMapping;
   t.colorSpace = THREE.SRGBColorSpace;
   scene.background = t;
+  scene.environment = t; // env-map gloss: metal actually reflects now
+  for (const m of [matWallA, matWallB, matWallC, matFloor, matCeil, matCrate, matDoor, matCeilTile])
+    m.envMapIntensity = 0.35;
 });
 
 function spriteTex(name) {
@@ -256,6 +259,16 @@ function spriteMat(map, extra = {}) {
     emissive: 0xffffff, emissiveMap: map, emissiveIntensity: 0.32, ...extra,
   });
 }
+// tiny radial-gradient canvas textures for glows, flashes, scorch decals
+function radialTex(stops) {
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  for (const [o, col] of stops) g.addColorStop(o, col);
+  ctx.fillStyle = g; ctx.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(c);
+}
+const glowTex = radialTex([[0, 'rgba(255,255,255,1)'], [0.35, 'rgba(255,255,255,0.55)'], [1, 'rgba(255,255,255,0)']]);
 
 // ============================== LEVEL GEOMETRY ==============================
 const solidCells = new Set();          // dynamic solidity (walls + crates + closed doors)
@@ -445,24 +458,29 @@ exitPad.position.set(cx(exitDef.x), 0.125, cx(exitDef.y));
 scene.add(exitPad);
 
 // ============================== PICKUPS ==============================
+// Nano Banana item sprites: billboards with additive glow halos
+const ITEM_DEFS = { // a = aspect from processed PNGs, h = world height, glow color
+  gold:     { a: 168/256, h: 0.6,  glow: 0xffcc44 },
+  treasure: { a: 153/218, h: 0.7,  glow: 0x44ffee },
+  health:   { a: 326/221, h: 0.5,  glow: 0xff5555 },
+  shells:   { a: 240/239, h: 0.45, glow: 0xcc8833 },
+  cells:    { a: 96/215,  h: 0.55, glow: 0x4488ff },
+  keycard:  { a: 289/156, h: 0.42, glow: 0xff3333 },
+  shotgun:  { a: 336/175, h: 0.55, glow: 0xffaa55 },
+  plasma:   { a: 300/120, h: 0.5,  glow: 0x00ffee },
+};
 function makePickupMesh(kind) {
+  const d = ITEM_DEFS[kind];
   const g = new THREE.Group();
-  const add = (geo, color, emissive = 0, y = 0) => {
-    const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
-      color, emissive: emissive || color, emissiveIntensity: emissive ? 0.9 : 0.25, roughness: 0.3, metalness: 0.6,
-    }));
-    m.position.y = y; g.add(m); return m;
-  };
-  switch (kind) {
-    case 'gold':     add(new THREE.CylinderGeometry(0.32, 0.32, 0.08, 18), 0xffcc22, 0xaa7700); g.children[0].rotation.x = Math.PI / 2; break;
-    case 'treasure': add(new THREE.OctahedronGeometry(0.4), 0x44ffee, 0x00ccaa); break;
-    case 'health':   { add(new THREE.BoxGeometry(0.55, 0.4, 0.55), 0xeeeeee); add(new THREE.BoxGeometry(0.4, 0.1, 0.12), 0xff2222, 0xaa0000, 0.21); add(new THREE.BoxGeometry(0.12, 0.1, 0.4), 0xff2222, 0xaa0000, 0.21); break; }
-    case 'shells':   add(new THREE.BoxGeometry(0.5, 0.3, 0.35), 0x886622, 0x332200); break;
-    case 'cells':    add(new THREE.BoxGeometry(0.4, 0.45, 0.4), 0x2266ff, 0x0033cc); break;
-    case 'keycard':  { const m = add(new THREE.BoxGeometry(0.5, 0.04, 0.32), 0xff2222, 0xcc0000); m.rotation.x = -0.5; break; }
-    case 'shotgun':  { add(new THREE.CylinderGeometry(0.07, 0.07, 1.1, 10), 0x444455).rotation.z = Math.PI / 2; add(new THREE.CylinderGeometry(0.07, 0.07, 1.1, 10), 0x333344, 0, 0.15).rotation.z = Math.PI / 2; add(new THREE.BoxGeometry(0.34, 0.16, 0.14), 0x885522, 0, -0.08); break; }
-    case 'plasma':   { add(new THREE.BoxGeometry(1.0, 0.3, 0.22), 0x223344); add(new THREE.CylinderGeometry(0.09, 0.09, 1.15, 10), 0x00ffee, 0x00ccbb).rotation.z = Math.PI / 2; break; }
-  }
+  const halo = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: glowTex, color: d.glow, transparent: true, opacity: 0.35,
+    blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
+  }));
+  halo.scale.setScalar(d.h * 2.1);
+  g.add(halo);
+  g.add(new THREE.Mesh(new THREE.PlaneGeometry(d.h * d.a, d.h),
+    spriteMat(spriteTex(`item_${kind}`), { emissiveIntensity: 0.55 })));
+  g.userData.halo = halo;
   return g;
 }
 const pickups = itemDefs.map(it => {
@@ -549,26 +567,31 @@ const weapons = {
   shotgun: { name: 'BOOMSTICK',    dmg: 8,  cd: 0.85, ammo: 0, pellets: 7, spread: 0.07, viewmodel: null, owned: false },
   plasma:  { name: 'PLASMA RIFLE', dmg: 22, cd: 0.16, ammo: 0, pellets: 1, spread: 0.02, viewmodel: null, owned: false, projectile: true },
 };
+// Nano Banana first-person weapon sprites (idle/fire/pump frames)
+const VM_DEFS = {
+  pistol:  { frames: ['idle', 'fire'],         aspect: 448/512, flash: 0x88ffff, tracer: 0xaaffff },
+  shotgun: { frames: ['idle', 'fire', 'pump'], aspect: 390/512, flash: 0xffaa33, tracer: 0xffcc88 },
+  plasma:  { frames: ['idle', 'fire'],         aspect: 448/512, flash: 0x33ffdd, tracer: 0x66ffee },
+};
 function makeViewmodel(kind) {
-  const g = new THREE.Group();
-  const mat = (c, e = 0, ei = 0) => new THREE.MeshStandardMaterial({ color: c, emissive: e, emissiveIntensity: ei, roughness: 0.4, metalness: 0.7 });
-  if (kind === 'pistol') {
-    g.add(Object.assign(new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.1, 0.42), mat(0x333344))));
-    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.18, 0.09), mat(0x222230)); grip.position.set(0, -0.12, 0.12); g.add(grip);
-    const glow = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.03, 0.2), mat(0x66ffff, 0x44cccc, 1.5)); glow.position.set(0, 0.045, -0.1); g.add(glow);
-  } else if (kind === 'shotgun') {
-    for (const s of [-1, 1]) { const t = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.65, 10), mat(0x3a3a44)); t.rotation.x = Math.PI / 2; t.position.set(s * 0.04, 0, -0.1); g.add(t); }
-    const stock = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.12, 0.3), mat(0x7a4a22)); stock.position.set(0, -0.05, 0.25); g.add(stock);
-  } else {
-    g.add(Object.assign(new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.14, 0.6), mat(0x223344))));
-    const core = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.7, 10), mat(0x00ffee, 0x00ddcc, 2)); core.rotation.x = Math.PI / 2; core.position.y = 0.02; g.add(core);
-  }
-  g.visible = false;
-  g.scale.setScalar(0.55);
-  camera.add(g);
-  g.position.set(0.24, -0.2, -0.5);
-  return g;
+  const d = VM_DEFS[kind];
+  d.tex = Object.fromEntries(d.frames.map(f => [f, spriteTex(`vm_${kind}_${f}`)]));
+  const H = 0.78;
+  const mat = new THREE.MeshBasicMaterial({ map: d.tex.idle, transparent: true, depthTest: false, depthWrite: false, toneMapped: false });
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(H * d.aspect, H), mat);
+  m.renderOrder = 999; // draw over everything, never clip into walls
+  m.position.set(0.17, -0.35, -1);
+  m.visible = false;
+  m.userData = { kind, mat, frame: 'idle' };
+  camera.add(m);
+  return m;
 }
+function vmSetFrame(vm, f) {
+  if (vm.userData.frame === f) return;
+  vm.userData.frame = f;
+  vm.userData.mat.map = VM_DEFS[vm.userData.kind].tex[f];
+}
+let swayX = 0, swayY = 0; // weapon lag from mouse look
 scene.add(camera);
 weapons.pistol.viewmodel = makeViewmodel('pistol');
 weapons.shotgun.viewmodel = makeViewmodel('shotgun');
@@ -611,6 +634,8 @@ addEventListener('mousemove', e => {
   if (!locked) return;
   player.yaw -= e.movementX * 0.0022;
   player.pitch = clamp(player.pitch - e.movementY * 0.0022, -1.45, 1.45);
+  swayX = clamp(swayX - e.movementX * 0.00045, -0.06, 0.06);
+  swayY = clamp(swayY + e.movementY * 0.00045, -0.05, 0.05);
 });
 document.addEventListener('pointerlockchange', () => {
   locked = document.pointerLockElement === canvas;
@@ -672,18 +697,103 @@ function los(x1, z1, x2, z2) {
 }
 
 // ============================== SHOOTING ==============================
-const projectiles = []; // {mesh, vx, vy, vz, dmg, hostile, life}
-const projGeo = new THREE.SphereGeometry(0.13, 8, 8);
-const enemyProjMat = new THREE.MeshBasicMaterial({ color: 0x66ff22 });
-const bossProjMat = new THREE.MeshBasicMaterial({ color: 0xff4422 });
-const plasmaProjMat = new THREE.MeshBasicMaterial({ color: 0x00ffee });
+const projectiles = []; // {mesh, vx, vy, vz, dmg, hostile, life, color, light, trailT}
+const projGeo = new THREE.SphereGeometry(0.13, 10, 10);
+const mkProjMat = c => new THREE.MeshBasicMaterial({ color: c, toneMapped: false }); // >1 brightness feeds bloom
+const enemyProjMat = mkProjMat(0x88ff33);
+const bossProjMat = mkProjMat(0xff5533);
+const plasmaProjMat = mkProjMat(0x33ffee);
+let projLights = 0; // cap concurrent projectile point lights
 
 function spawnProjectile(x, y, z, dir, speed, dmg, hostile, mat) {
   const mesh = new THREE.Mesh(projGeo, mat);
   mesh.scale.setScalar(hostile ? 1.6 : 1.2);
   mesh.position.set(x, y, z);
+  const color = mat.color.getHex();
+  const halo = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: glowTex, color, transparent: true, opacity: 0.7,
+    blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
+  }));
+  halo.scale.setScalar(0.65);
+  mesh.add(halo);
+  let light = null;
+  if (projLights < 6) { light = new THREE.PointLight(color, 2.2, 8); mesh.add(light); projLights++; }
   scene.add(mesh);
-  projectiles.push({ mesh, vx: dir.x * speed, vy: dir.y * speed, vz: dir.z * speed, dmg, hostile, life: 3 });
+  projectiles.push({ mesh, vx: dir.x * speed, vy: dir.y * speed, vz: dir.z * speed, dmg, hostile, life: 3, color, light, trailT: 0 });
+}
+
+// ---- tracers (hitscan streaks) ----
+const tracers = [];
+const tracerGeo = new THREE.CylinderGeometry(0.013, 0.013, 1, 5, 1, true);
+tracerGeo.rotateX(Math.PI / 2); // align along Z so lookAt works
+const _mw = new THREE.Vector3();
+function muzzleWorld() { return camera.localToWorld(_mw.set(0.2, -0.32, -1.05)).clone(); }
+function spawnTracer(a, x, y, z, color) {
+  const b = new THREE.Vector3(x, y, z);
+  const len = a.distanceTo(b);
+  if (len < 0.6) return;
+  const m = new THREE.Mesh(tracerGeo, new THREE.MeshBasicMaterial({
+    color, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending,
+    depthWrite: false, toneMapped: false,
+  }));
+  m.position.copy(a).lerp(b, 0.5);
+  m.lookAt(b);
+  m.scale.set(1, 1, len);
+  scene.add(m);
+  tracers.push({ mesh: m, life: 0.08, max: 0.08 });
+}
+
+// ---- glow puffs (muzzle flash, projectile trails, impact bursts) ----
+const puffs = [];
+const puffMatBase = new THREE.SpriteMaterial({ map: glowTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+function spawnPuff(x, y, z, color, scale = 0.45, life = 0.25) {
+  const m = puffMatBase.clone(); m.color.set(color); m.opacity = 0.6;
+  const s = new THREE.Sprite(m);
+  s.position.set(x, y, z); s.scale.setScalar(scale);
+  scene.add(s);
+  puffs.push({ spr: s, life, max: life });
+}
+
+// ---- bullet decals (scorch marks on walls) ----
+const decals = [];
+const decalGeo = new THREE.PlaneGeometry(1, 1);
+const scorchTex = radialTex([[0, 'rgba(12,10,8,0.95)'], [0.45, 'rgba(25,18,12,0.85)'], [0.7, 'rgba(70,45,20,0.3)'], [1, 'rgba(0,0,0,0)']]);
+function spawnDecal(x, y, z, dir) {
+  if (decals.length >= 40) { const d = decals.shift(); scene.remove(d.mesh); }
+  const m = new THREE.Mesh(decalGeo, new THREE.MeshBasicMaterial({ map: scorchTex, transparent: true, depthWrite: false, opacity: 0.9 }));
+  m.scale.setScalar(rand(0.3, 0.45));
+  m.position.set(x, y, z);
+  m.lookAt(x - dir.x, y - dir.y, z - dir.z);
+  m.rotateZ(rand(0, TAU));
+  scene.add(m);
+  decals.push({ mesh: m, life: 9 });
+}
+
+// ---- sparks (additive impact debris) ----
+const sparkGeo = new THREE.BoxGeometry(0.05, 0.05, 0.05);
+function spawnSparks(x, y, z, color, count) {
+  for (let i = 0; i < count; i++) {
+    const m = new THREE.Mesh(sparkGeo, new THREE.MeshBasicMaterial({
+      color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
+    }));
+    m.position.set(x, y, z);
+    m.scale.setScalar(rand(0.6, 1.6));
+    scene.add(m);
+    gibs.push({ mesh: m, vx: rand(-3, 3), vy: rand(0.5, 4), vz: rand(-3, 3), life: rand(0.15, 0.45), spark: true });
+  }
+}
+
+// ---- ejected casings (brass, env-map gloss; bounce on the floor) ----
+const casingGeo = new THREE.CylinderGeometry(0.016, 0.016, 0.07, 6);
+const casingMat = new THREE.MeshStandardMaterial({ color: 0xd9a93f, metalness: 1, roughness: 0.25, envMapIntensity: 1.2 });
+const shellMat = new THREE.MeshStandardMaterial({ color: 0xcc2222, metalness: 0.4, roughness: 0.5 });
+function ejectCasing(isShotgun) {
+  const m = new THREE.Mesh(casingGeo, isShotgun ? shellMat : casingMat);
+  m.position.copy(camera.localToWorld(_mw.set(0.3, -0.28, -0.6)));
+  const right = _mw.set(1, 0.4, 0).applyQuaternion(camera.quaternion);
+  scene.add(m);
+  gibs.push({ mesh: m, vx: right.x * rand(1.5, 2.6) + rand(-0.4, 0.4), vy: rand(2, 3.2),
+              vz: right.z * rand(1.5, 2.6) + rand(-0.4, 0.4), life: rand(1.1, 1.5), casing: true });
 }
 
 const gibs = [];
@@ -705,7 +815,12 @@ function fire() {
   player.fireCd = w.cd;
   if (w.ammo !== Infinity) w.ammo--;
   player.kick = 1;
+  w.sinceFire = 0;
+  muzzle.color.set(VM_DEFS[currentWeapon].flash);
   muzzle.intensity = 30;
+  const mzl = muzzleWorld();
+  spawnPuff(mzl.x, mzl.y, mzl.z, VM_DEFS[currentWeapon].flash, 0.5, 0.08);
+  if (currentWeapon !== 'plasma') ejectCasing(currentWeapon === 'shotgun');
   (currentWeapon === 'shotgun' ? sfx.shotgun : currentWeapon === 'plasma' ? sfx.plasma : sfx.pistol)();
 
   const fwd = new THREE.Vector3();
@@ -722,19 +837,21 @@ function fire() {
       dir.y += rand(-w.spread, w.spread);
       dir.z += rand(-w.spread, w.spread);
       dir.normalize();
-      hitscan(dir, w.dmg);
+      hitscan(dir, w.dmg, VM_DEFS[currentWeapon].tracer);
     }
   }
   updateHud();
 }
 
-function hitscan(dir, dmg) {
+function hitscan(dir, dmg, color) {
   let x = player.x, y = player.y, z = player.z;
   for (let i = 0; i < 300; i++) {
     x += dir.x * 0.25; y += dir.y * 0.25; z += dir.z * 0.25;
     if (y < 0 || y > WALL_H) break;
     if (cellSolid(Math.floor(x / CELL), Math.floor(z / CELL))) {
-      spawnGibs(x - dir.x * 0.2, y - dir.y * 0.2, z - dir.z * 0.2, 0xffaa44, 3);
+      spawnSparks(x - dir.x * 0.2, y - dir.y * 0.2, z - dir.z * 0.2, 0xffcc66, 5);
+      spawnPuff(x - dir.x * 0.25, y - dir.y * 0.25, z - dir.z * 0.25, 0xffaa55, 0.3, 0.12);
+      spawnDecal(x - dir.x * 0.22, y - dir.y * 0.22, z - dir.z * 0.22, dir);
       break;
     }
     let hit = false;
@@ -749,6 +866,7 @@ function hitscan(dir, dmg) {
     }
     if (hit) break;
   }
+  spawnTracer(muzzleWorld(), x, y, z, color);
 }
 
 function damageMonster(m, dmg, hx, hy, hz) {
@@ -914,10 +1032,23 @@ function update(dt) {
   camera.rotation.y = player.yaw;
   camera.rotation.x = player.pitch + player.kick * 0.06;
 
-  // viewmodel bob
-  const vm = weapons[currentWeapon].viewmodel;
-  vm.position.y = -0.2 + Math.sin(player.bobPhase * 2) * 0.012 + player.kick * 0.05;
-  vm.position.z = -0.5 + player.kick * 0.12;
+  // viewmodel sprite: frame state, bob, sway, recoil
+  const cw = weapons[currentWeapon];
+  cw.sinceFire = (cw.sinceFire ?? 99) + dt;
+  const vm = cw.viewmodel;
+  let vmf = 'idle';
+  if (currentWeapon === 'shotgun') {
+    if (cw.sinceFire < 0.12) vmf = 'fire';
+    else if (cw.sinceFire > 0.28 && cw.sinceFire < 0.62) vmf = 'pump';
+  } else if (cw.sinceFire < 0.09) vmf = 'fire';
+  vmSetFrame(vm, vmf);
+  const dk = Math.pow(0.002, dt);
+  swayX *= dk; swayY *= dk;
+  vm.position.x = 0.17 + Math.sin(player.bobPhase) * 0.02 + swayX;
+  vm.position.y = -0.35 - Math.abs(Math.sin(player.bobPhase)) * 0.016 + swayY
+                  + player.kick * 0.06 + (vmf === 'pump' ? -0.06 : 0);
+  vm.position.z = -1 + player.kick * 0.18;
+  vm.rotation.z = swayX * 0.8 + (vmf === 'pump' ? 0.05 : 0);
 
   // ---- doors ----
   for (const d of doorObjs) {
@@ -957,8 +1088,9 @@ function update(dt) {
   // ---- pickups ----
   for (const p of pickups) {
     if (p.taken) continue;
-    p.mesh.rotation.y += dt * 2;
+    p.mesh.lookAt(player.x, p.mesh.position.y, player.z); // billboard
     p.mesh.position.y = 0.8 + Math.sin(t * 2.5 + p.spin) * 0.12;
+    p.mesh.userData.halo.material.opacity = 0.28 + Math.sin(t * 3 + p.spin) * 0.12;
     const dx = p.mesh.position.x - player.x, dz = p.mesh.position.z - player.z;
     if (dx * dx + dz * dz < 1.4) takePickup(p);
   }
@@ -1019,7 +1151,7 @@ function update(dt) {
         // hitscan w/ distance-based miss chance
         beep(260, 0.08, 'square', 0.05, -100);
         if (Math.random() < clamp(1 - dist / 28, 0.25, 0.9)) hurtPlayer(m.dmg);
-        else spawnGibs(player.x - dir.x + rand(-1, 1), rand(0.5, 2), player.z - dir.z + rand(-1, 1), 0xffaa44, 2);
+        else spawnSparks(player.x - dir.x + rand(-1, 1), rand(0.5, 2), player.z - dir.z + rand(-1, 1), 0xffaa44, 3);
       } else if (m.type === 'spitter') {
         sfx.spit();
         spawnProjectile(m.x, 1.3, m.z, dir, 13, m.dmg, true, enemyProjMat);
@@ -1043,6 +1175,11 @@ function update(dt) {
     p.mesh.position.y += p.vy * dt;
     p.mesh.position.z += p.vz * dt;
     p.life -= dt;
+    p.trailT -= dt;
+    if (p.trailT <= 0) {
+      p.trailT = 0.04;
+      spawnPuff(p.mesh.position.x, p.mesh.position.y, p.mesh.position.z, p.color, p.hostile ? 0.55 : 0.4, 0.22);
+    }
     const px = p.mesh.position.x, py = p.mesh.position.y, pz = p.mesh.position.z;
     let kill = p.life <= 0 || py < 0 || py > WALL_H ||
                cellSolid(Math.floor(px / CELL), Math.floor(pz / CELL));
@@ -1061,22 +1198,46 @@ function update(dt) {
       }
     }
     if (kill) {
-      spawnGibs(px, py, pz, p.hostile ? 0x66ff22 : 0x00ffee, 3);
+      spawnSparks(px, py, pz, p.color, 5);
+      spawnPuff(px, py, pz, p.color, 0.9, 0.18);
+      if (p.light) projLights--;
       scene.remove(p.mesh);
       projectiles.splice(i, 1);
     }
   }
 
-  // ---- gibs ----
+  // ---- gibs / sparks / casings ----
   for (let i = gibs.length - 1; i >= 0; i--) {
     const g = gibs[i];
-    g.vy -= 12 * dt;
+    g.vy -= (g.spark ? 7 : 12) * dt;
     g.mesh.position.x += g.vx * dt;
     g.mesh.position.y += g.vy * dt;
     g.mesh.position.z += g.vz * dt;
     g.mesh.rotation.x += dt * 6; g.mesh.rotation.z += dt * 5;
+    if (g.casing && g.mesh.position.y < 0.04 && g.vy < 0) {
+      g.mesh.position.y = 0.04; g.vy *= -0.35; g.vx *= 0.55; g.vz *= 0.55;
+    }
     g.life -= dt;
-    if (g.life <= 0 || g.mesh.position.y < 0) { scene.remove(g.mesh); gibs.splice(i, 1); }
+    if (g.spark) g.mesh.material.opacity = clamp(g.life * 3, 0, 1);
+    if (g.life <= 0 || (!g.casing && g.mesh.position.y < 0)) { scene.remove(g.mesh); gibs.splice(i, 1); }
+  }
+
+  // ---- tracers / puffs / decals ----
+  for (let i = tracers.length - 1; i >= 0; i--) {
+    const tr = tracers[i]; tr.life -= dt;
+    tr.mesh.material.opacity = Math.max(0, tr.life / tr.max) * 0.85;
+    if (tr.life <= 0) { scene.remove(tr.mesh); tracers.splice(i, 1); }
+  }
+  for (let i = puffs.length - 1; i >= 0; i--) {
+    const pf = puffs[i]; pf.life -= dt;
+    pf.spr.material.opacity = Math.max(0, pf.life / pf.max) * 0.6;
+    pf.spr.scale.multiplyScalar(Math.max(0, 1 - dt * 2));
+    if (pf.life <= 0) { scene.remove(pf.spr); puffs.splice(i, 1); }
+  }
+  for (let i = decals.length - 1; i >= 0; i--) {
+    const d = decals[i]; d.life -= dt;
+    if (d.life < 2) d.mesh.material.opacity = d.life / 2 * 0.9;
+    if (d.life <= 0) { scene.remove(d.mesh); decals.splice(i, 1); }
   }
 
   // ---- flickering lights ----
