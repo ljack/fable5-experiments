@@ -46,7 +46,10 @@
   #dialog .hint { color: #678; font-size: 12px; margin-top: 8px; }
 </style>
 <script type="importmap">
-{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
 </script>
 </head>
 <body>
@@ -92,6 +95,11 @@
 
 <script type="module">
 import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { CELL, WALL_H, GRID_W, GRID_H, grid, playerStart, doors as doorDefs,
          monsters as monsterDefs, items as itemDefs, npcs as npcDefs,
          crates as crateDefs, lights as lightDefs, exit as exitDef, bossArena } from './level.js';
@@ -182,6 +190,9 @@ renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.45;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+let QUALITY = true; // P toggles post+shadows
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x05060a);
@@ -194,6 +205,7 @@ addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
 });
 
 scene.add(new THREE.AmbientLight(0x36465a, 2.4));
@@ -201,11 +213,13 @@ scene.add(new THREE.HemisphereLight(0x44607a, 0x1a120c, 1.1));
 
 // ============================== TEXTURES ==============================
 const texLoader = new THREE.TextureLoader();
+const MAX_ANISO = renderer.capabilities.getMaxAnisotropy();
 function pbr(name, repeat = 1) {
   const make = suffix => {
     const t = texLoader.load(`assets/${name}_1K-JPG_${suffix}.jpg`);
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
     t.repeat.set(repeat, repeat);
+    t.anisotropy = MAX_ANISO;
     if (suffix === 'Color') t.colorSpace = THREE.SRGBColorSpace;
     return t;
   };
@@ -220,6 +234,28 @@ const matFloor  = pbr('Concrete034', 24);
 const matCeil   = pbr('Metal032', 24);
 const matCrate  = pbr('Planks021');
 const matDoor   = pbr('MetalPlates007');
+const matCeilTile = pbr('Metal032', 1.5);
+
+// skybox (visible through the open-air boss arena roof)
+texLoader.load('assets/sprites/skybox.jpg', t => {
+  t.mapping = THREE.EquirectangularReflectionMapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  scene.background = t;
+});
+
+function spriteTex(name) {
+  const t = texLoader.load(`assets/sprites/${name}.png`);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = MAX_ANISO;
+  return t;
+}
+// sprites need an emissive lift: the painted art is pre-lit, pure Lambert goes near-black in dark halls
+function spriteMat(map, extra = {}) {
+  return new THREE.MeshLambertMaterial({
+    map, transparent: true, alphaTest: 0.4, side: THREE.DoubleSide,
+    emissive: 0xffffff, emissiveMap: map, emissiveIntensity: 0.32, ...extra,
+  });
+}
 
 // ============================== LEVEL GEOMETRY ==============================
 const solidCells = new Set();          // dynamic solidity (walls + crates + closed doors)
@@ -253,15 +289,37 @@ const isWall = (x, y) => x < 0 || y < 0 || x >= GRID_W || y >= GRID_H || grid[y]
   });
 }
 
-// floor & ceiling
+// floor & per-cell ceiling (boss arena is open to the toxic sky)
+const inBossArena = (x, y) => x >= bossArena.x1 && x <= bossArena.x2 && y >= bossArena.y1 && y <= bossArena.y2;
 {
   const w = GRID_W * CELL, h = GRID_H * CELL;
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(w, h), matFloor);
   floor.rotation.x = -Math.PI / 2; floor.position.set(w / 2, 0, h / 2);
+  floor.receiveShadow = true;
   scene.add(floor);
-  const ceil = new THREE.Mesh(new THREE.PlaneGeometry(w, h), matCeil);
-  ceil.rotation.x = Math.PI / 2; ceil.position.set(w / 2, WALL_H, h / 2);
-  scene.add(ceil);
+
+  const cells = [];
+  for (let y = 0; y < GRID_H; y++) for (let x = 0; x < GRID_W; x++)
+    if (grid[y][x] === 0 && !inBossArena(x, y)) cells.push([x, y]);
+  const geo = new THREE.PlaneGeometry(CELL, CELL);
+  const inst = new THREE.InstancedMesh(geo, matCeilTile, cells.length);
+  const m4 = new THREE.Matrix4(), rot = new THREE.Matrix4().makeRotationX(Math.PI / 2);
+  cells.forEach(([x, y], i) => {
+    m4.copy(rot).setPosition(cx(x), WALL_H, cx(y));
+    inst.setMatrixAt(i, m4);
+  });
+  inst.receiveShadow = true;
+  scene.add(inst);
+
+  // cool sky light spilling into the open boss arena
+  const moon = new THREE.DirectionalLight(0x8aa7cc, 1.6);
+  moon.position.set(cx(17) + 14, 30, cx(30) - 10);
+  moon.target.position.set(cx(17), 0, cx(30));
+  moon.castShadow = true;
+  moon.shadow.mapSize.set(1024, 1024);
+  moon.shadow.camera.left = -55; moon.shadow.camera.right = 55;
+  moon.shadow.camera.top = 55; moon.shadow.camera.bottom = -55;
+  scene.add(moon, moon.target);
 }
 
 // toxic sludge (GLSL shader) in the spitter hall
@@ -293,6 +351,8 @@ const sludgeUniforms = { uTime: { value: 0 } };
   scene.add(m);
 }
 
+const billboards = []; // simple Y-billboarded planes (barrels)
+
 // point lights + emissive ceiling panels
 for (const [gx, gy, color, intensity, flicker] of lightDefs) {
   const l = new THREE.PointLight(color, intensity * 2.2, 32, 1.4);
@@ -310,15 +370,56 @@ for (const [gx, gy, color, intensity, flicker] of lightDefs) {
 const allLights = [];
 scene.traverse(o => { if (o.isPointLight) allLights.push(o); });
 
-// crates
-for (const c of crateDefs) {
+// crates (with toxic barrel sprite on top of some)
+const barrelTex = spriteTex('barrel');
+for (const [i, c] of crateDefs.entries()) {
   const s = CELL * 0.8;
   const m = new THREE.Mesh(new THREE.BoxGeometry(s, s * 0.75, s), matCrate);
   m.position.set(cx(c.x), s * 0.375, cx(c.y));
   m.rotation.y = rand(-0.2, 0.2);
+  m.castShadow = m.receiveShadow = true;
   scene.add(m);
   solidCells.add(key(c.x, c.y));
+  if (i % 2 === 0) {
+    const bh = 1.5;
+    const b = new THREE.Mesh(new THREE.PlaneGeometry(bh * 304/384, bh), spriteMat(barrelTex));
+    b.position.set(cx(c.x), s * 0.75 + bh / 2, cx(c.y));
+    scene.add(b);
+    billboards.push(b);
+  }
 }
+
+// wall decals (warning signs sheet) on walls facing open floor
+{
+  const decTex = spriteTex('decals');
+  const decMat = new THREE.MeshLambertMaterial({ map: decTex, transparent: true, alphaTest: 0.3, side: THREE.DoubleSide });
+  const spots = [[11, 4, 'S'], [20, 1, 'S'], [29, 6, 'W'], [13, 16, 'N'], [30, 19, 'W'], [9, 27, 'N'], [36, 15, 'S']];
+  for (const [gx, gy, side] of spots) {
+    const d = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 2.6), decMat);
+    const eps = 0.06;
+    if (side === 'S') { d.position.set(cx(gx), 2.2, gy * CELL + CELL + eps); }
+    if (side === 'N') { d.position.set(cx(gx), 2.2, gy * CELL - eps); d.rotation.y = Math.PI; }
+    if (side === 'W') { d.position.set(gx * CELL - eps, 2.2, cx(gy)); d.rotation.y = -Math.PI / 2; }
+    scene.add(d);
+  }
+}
+
+// floating dust motes
+const dust = (() => {
+  const N = 400;
+  const pos = new Float32Array(N * 3);
+  for (let i = 0; i < N; i++) {
+    pos[i*3] = rand(0, GRID_W * CELL);
+    pos[i*3+1] = rand(0.2, WALL_H);
+    pos[i*3+2] = rand(0, GRID_H * CELL);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const mat = new THREE.PointsMaterial({ color: 0x99bbaa, size: 0.035, transparent: true, opacity: 0.55, sizeAttenuation: true });
+  const pts = new THREE.Points(geo, mat);
+  scene.add(pts);
+  return pts;
+})();
 
 // doors
 const doorObjs = [];
@@ -371,36 +472,36 @@ const pickups = itemDefs.map(it => {
   return { ...it, mesh, taken: false, spin: rand(0, TAU) };
 });
 
-// ============================== MONSTERS ==============================
+// ============================== MONSTERS (Nano Banana sprite billboards) ==============================
+const MON_FRAMES = {};
+for (const type of ['grunt', 'spitter', 'boss'])
+  MON_FRAMES[type] = Object.fromEntries(['idle', 'walk', 'attack', 'die'].map(f => [f, spriteTex(`${type}_${f}`)]));
+const MON_HEIGHT = { grunt: 2.4, spitter: 1.7, boss: 4.6 };
+const MON_ASPECT = { // frame width/height ratios from the processed sprites
+  grunt:   { idle: 265/430, walk: 312/415, attack: 386/427, die: 435/376 },
+  spitter: { idle: 408/362, walk: 401/359, attack: 465/357, die: 477/256 },
+  boss:    { idle: 446/448, walk: 398/455, attack: 451/437, die: 441/431 },
+};
 function makeMonsterMesh(type) {
+  const mat = spriteMat(MON_FRAMES[type].idle);
+  const h = MON_HEIGHT[type];
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat);
+  mesh.scale.set(h * MON_ASPECT[type].idle, h, 1);
+  mesh.position.y = h / 2;
+  mesh.castShadow = true;
   const g = new THREE.Group();
-  const mat = (c, e = 0x000000, ei = 0) => new THREE.MeshStandardMaterial({ color: c, emissive: e, emissiveIntensity: ei, roughness: 0.55 });
-  if (type === 'grunt') {
-    const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.45, 0.7, 6, 12), mat(0x3a5a2a)); body.position.y = 1.0; g.add(body);
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.34, 14, 12), mat(0x4a6a33)); head.position.y = 1.85; g.add(head);
-    for (const s of [-1, 1]) {
-      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 8), mat(0xff3300, 0xff2200, 2)); eye.position.set(s * 0.14, 1.9, 0.27); g.add(eye);
-      const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.12, 0.6, 4, 8), mat(0x33502a)); arm.position.set(s * 0.58, 1.0, 0); arm.rotation.z = s * 0.35; g.add(arm);
-    }
-    const gun = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.7), mat(0x222228)); gun.position.set(0.58, 0.85, 0.35); g.add(gun);
-  } else if (type === 'spitter') {
-    const body = new THREE.Mesh(new THREE.SphereGeometry(0.65, 14, 12), mat(0x2a7a2a, 0x0a3a0a, 0.5)); body.position.y = 0.85; body.scale.y = 1.25; g.add(body);
-    const maw = new THREE.Mesh(new THREE.SphereGeometry(0.26, 10, 8), mat(0x88ff44, 0x55cc22, 1.4)); maw.position.set(0, 1.05, 0.5); g.add(maw);
-    for (let i = 0; i < 5; i++) {
-      const spike = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.45, 6), mat(0x1a4a1a));
-      const a = (i / 5) * Math.PI - Math.PI / 2;
-      spike.position.set(Math.sin(a) * 0.5, 1.5 + Math.cos(a) * 0.25, -0.2);
-      spike.rotation.z = -a; g.add(spike);
-    }
-  } else { // boss
-    const body = new THREE.Mesh(new THREE.SphereGeometry(1.25, 16, 14), mat(0x6a2a6a, 0x2a0a2a, 0.4)); body.position.y = 1.6; body.scale.y = 1.3; g.add(body);
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.6, 14, 12), mat(0x7a3a7a)); head.position.y = 3.2; g.add(head);
-    for (const s of [-1, 1]) {
-      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.16, 8, 8), mat(0xff2200, 0xff2200, 2.5)); eye.position.set(s * 0.26, 3.3, 0.48); g.add(eye);
-      const horn = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.8, 8), mat(0xddddcc)); horn.position.set(s * 0.45, 3.75, 0); horn.rotation.z = s * -0.4; g.add(horn);
-      const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.3, 1.2, 4, 8), mat(0x5a225a)); arm.position.set(s * 1.45, 1.7, 0); arm.rotation.z = s * 0.5; g.add(arm);
-    }
-  }
+  g.add(mesh);
+  g.userData.sprite = mesh;
+  g.userData.setFrame = f => {
+    if (g.userData.frame === f) return;
+    g.userData.frame = f;
+    mat.map = mat.emissiveMap = MON_FRAMES[type][f];
+    const ar = MON_ASPECT[type][f];
+    const hh = f === 'die' ? h * 0.55 : h;
+    mesh.scale.set(hh * ar, hh, 1);
+    mesh.position.y = hh / 2;
+  };
+  g.userData.frame = 'idle';
   return g;
 }
 const MON_STATS = {
@@ -414,22 +515,25 @@ const monsters = monsterDefs.map(md => {
   scene.add(mesh);
   return { type: md.type, ...MON_STATS[md.type], maxHp: MON_STATS[md.type].hp,
            x: cx(md.x), z: cx(md.y), mesh, dead: false, cd: rand(0.5, 1.5),
-           aggroed: false, bob: rand(0, TAU), hitFlash: 0 };
+           aggroed: false, bob: rand(0, TAU), hitFlash: 0, attackAnim: 0 };
 });
 
-// ============================== NPC ==============================
+// ============================== NPC (sprite billboard) ==============================
+const npcTex = { idle: spriteTex('npc_idle'), talk: spriteTex('npc_talk') };
 const npcObjs = npcDefs.map(nd => {
   const g = new THREE.Group();
-  const mat = c => new THREE.MeshStandardMaterial({ color: c, roughness: 0.7 });
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.4, 0.75, 6, 12), mat(0x3355aa)); body.position.y = 1.0; g.add(body);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.3, 14, 12), mat(0xddaa88)); head.position.y = 1.8; g.add(head);
-  const cap  = new THREE.Mesh(new THREE.CylinderGeometry(0.31, 0.33, 0.18, 12), mat(0x224488)); cap.position.y = 1.98; g.add(cap);
-  const mop  = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 2.1, 8), mat(0x886644)); mop.position.set(0.55, 1.05, 0); mop.rotation.z = 0.12; g.add(mop);
+  const mat = spriteMat(npcTex.idle);
+  const H = 2.1;
+  const sprite = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat);
+  sprite.scale.set(H * 198/512, H, 1);
+  sprite.position.y = H / 2;
+  sprite.castShadow = true;
+  g.add(sprite);
   const mark = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.4, 8), new THREE.MeshBasicMaterial({ color: 0x66ffff }));
   mark.position.y = 2.6; mark.rotation.x = Math.PI; g.add(mark);
   g.position.set(cx(nd.x), 0, cx(nd.y));
   scene.add(g);
-  return { ...nd, mesh: g, mark, line: 0 };
+  return { ...nd, mesh: g, mark, line: 0, mat, sprite, talkUntil: 0 };
 });
 const NPC_LINES = [
   "Whoa, easy with that thing! I just mop here, man.",
@@ -679,6 +783,7 @@ const dmgEl = document.getElementById('dmg');
 function hurtPlayer(dmg) {
   if (player.dead || gameEnded) return;
   player.hp -= dmg;
+  hurtPulse = 1;
   sfx.hurt();
   dmgEl.style.opacity = 1;
   setTimeout(() => dmgEl.style.opacity = 0, 220);
@@ -708,6 +813,7 @@ function useKey() {
       dialogEl.querySelector('.text').textContent = NPC_LINES[n.line % NPC_LINES.length];
       n.line++;
       dialogEl.style.display = 'block';
+      n.talkUntil = performance.now() / 1000 + 3;
       beep(500, 0.08, 'triangle', 0.05);
       clearTimeout(dialogEl._t);
       dialogEl._t = setTimeout(() => { dialogEl.style.display = 'none'; }, 6000);
@@ -861,37 +967,52 @@ function update(dt) {
   for (const n of npcObjs) {
     n.mark.position.y = 2.6 + Math.sin(t * 3) * 0.1;
     n.mesh.lookAt(player.x, 0, player.z);
+    n.mat.map = n.mat.emissiveMap = t < n.talkUntil ? npcTex.talk : npcTex.idle;
   }
+
+  // ---- prop billboards (barrels) ----
+  for (const b of billboards) b.lookAt(player.x, b.position.y, player.z);
 
   // ---- monsters ----
   for (const m of monsters) {
-    if (m.dead) { m.mesh.position.y = Math.max(m.mesh.position.y - dt * 3, -2.5); continue; }
+    m.mesh.lookAt(player.x, m.mesh.position.y, player.z); // Y-axis billboard
+    if (m.dead) {
+      m.mesh.userData.setFrame('die');
+      m.mesh.position.y = 0;
+      const mat = m.mesh.userData.sprite.material;
+      if (m.type !== 'boss') mat.opacity = Math.max(0.55, (mat.opacity ?? 1) - dt * 0.3);
+      continue;
+    }
     m.cd -= dt;
+    if (m.attackAnim > 0) m.attackAnim -= dt;
     if (m.hitFlash > 0) {
       m.hitFlash -= dt;
-      m.mesh.traverse(o => { if (o.material?.emissive) o.material.emissiveIntensity = 3; });
+      m.mesh.userData.sprite.material.color.setRGB(4, 1.5, 1.5);
     } else {
-      m.mesh.traverse(o => { if (o.material?.emissive) o.material.emissiveIntensity = o.userData._ei ?? (o.userData._ei = o.material.emissiveIntensity); });
+      m.mesh.userData.sprite.material.color.setRGB(1, 1, 1);
     }
     const dx = player.x - m.x, dz = player.z - m.z;
     const dist = Math.hypot(dx, dz);
     const seen = dist < m.aggro && los(m.x, m.z, player.x, player.z);
     if (seen) m.aggroed = true;
-    if (!m.aggroed || player.dead) { m.mesh.position.set(m.x, 0, m.z); continue; }
+    if (!m.aggroed || player.dead) { m.mesh.position.set(m.x, 0, m.z); m.mesh.userData.setFrame('idle'); continue; }
 
     // move toward player (stop at comfortable range for ranged attackers)
     const wantRange = m.type === 'grunt' ? 7 : m.type === 'spitter' ? 9 : 3.5;
+    let moving = false;
     if (dist > wantRange || !seen) {
       const sp = m.speed * dt;
       tryMove(m, dx / dist * sp, dz / dist * sp, m.radius);
+      moving = true;
     }
+    m.mesh.userData.setFrame(m.attackAnim > 0 ? 'attack' : moving ? 'walk' : 'idle');
     m.bob += dt * 6;
-    m.mesh.position.set(m.x, Math.abs(Math.sin(m.bob)) * 0.08, m.z);
-    m.mesh.lookAt(player.x, 0, player.z);
+    m.mesh.position.set(m.x, Math.abs(Math.sin(m.bob)) * (moving ? 0.08 : 0.02), m.z);
 
     // attack
     if (seen && m.cd <= 0 && dist < m.attackRange) {
       m.cd = m.attackCd * rand(0.85, 1.25);
+      m.attackAnim = 0.45;
       const dy = (player.y - 0.2) - 1.2;
       const dir = new THREE.Vector3(dx, dy, dz).normalize();
       if (m.type === 'grunt') {
@@ -981,12 +1102,56 @@ function update(dt) {
   }
 }
 
+// ============================== POST-PROCESSING ==============================
+// multisampled HDR target — EffectComposer's default RT has no MSAA, which shimmers badly on the metal textures
+const composerRT = new THREE.WebGLRenderTarget(innerWidth, innerHeight, { samples: 4, type: THREE.HalfFloatType });
+const composer = new EffectComposer(renderer, composerRT);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.55, 0.6, 0.82);
+composer.addPass(bloom);
+const grainVignette = new ShaderPass({
+  uniforms: { tDiffuse: { value: null }, uTime: { value: 0 }, uHurt: { value: 0 } },
+  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+  fragmentShader: `
+    uniform sampler2D tDiffuse; uniform float uTime; uniform float uHurt;
+    varying vec2 vUv;
+    float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7)) + uTime * 13.0) * 43758.5453); }
+    void main(){
+      vec2 uv = vUv;
+      vec2 d = (uv - 0.5) * (0.0035 + uHurt * 0.01);
+      vec3 col;
+      col.r = texture2D(tDiffuse, uv + d).r;
+      col.g = texture2D(tDiffuse, uv).g;
+      col.b = texture2D(tDiffuse, uv - d).b;
+      float v = smoothstep(1.25, 0.45, length(uv - 0.5) * 1.6);
+      col *= mix(0.55, 1.0, v);
+      col += (hash(uv * vec2(1920.0, 1080.0)) - 0.5) * 0.025;
+      col = mix(col, vec3(0.7, 0.05, 0.05), uHurt * 0.35);
+      gl_FragColor = vec4(col, 1.0);
+    }`,
+});
+composer.addPass(grainVignette);
+composer.addPass(new OutputPass());
+let hurtPulse = 0;
+
+addEventListener('keydown', e => {
+  if (e.code === 'KeyP') {
+    QUALITY = !QUALITY;
+    renderer.shadowMap.enabled = QUALITY;
+    msg(QUALITY ? 'QUALITY: HIGH' : 'QUALITY: LOW (P to toggle)');
+  }
+});
+
 let last = performance.now();
 function frame(now) {
   const dt = Math.min((now - last) / 1000, 0.05);
   last = now;
   update(dt);
-  renderer.render(scene, camera);
+  hurtPulse = Math.max(0, hurtPulse - dt * 2.5);
+  grainVignette.uniforms.uTime.value = now / 1000;
+  grainVignette.uniforms.uHurt.value = hurtPulse;
+  if (QUALITY) composer.render();
+  else renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
