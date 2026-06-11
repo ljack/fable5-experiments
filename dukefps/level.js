@@ -1,6 +1,13 @@
-// Level definition for TOXIC SECTOR.
+// Level 1: WASTE PROCESSING. TOXIC SECTOR.
 // Grid-based: 1 = solid wall, 0 = floor. Carved from solid rock.
 // Shared by the game (index.html) and validate.mjs (node connectivity test).
+
+export const meta = {
+  id: 1, name: 'WASTE PROCESSING',
+  intro: 'The mutants took over the waste processing plant. Somebody\u2019s gotta take out the trash \u2014 and the janitor sure isn\u2019t armed.',
+  objective: 'Find the RED KEYCARD. Kill the SLUDGE KING. Reach the exit pad.',
+  bossName: 'SLUDGE KING', parTime: 240, next: 'level2',
+};
 
 export const CELL = 4;          // world units per grid cell
 export const WALL_H = 4.5;      // wall height
@@ -42,26 +49,31 @@ export const doors = [
   { x: 4,  y: 9,  axis: 'y', secret: true },    // secret wall (press E)
 ];
 
-// type: grunt | spitter | boss
+// type: grunt | spitter | boss | drone
 export const monsters = [
   { type: 'grunt',   x: 15, y: 4 },
   { type: 'grunt',   x: 21, y: 5 },
   { type: 'grunt',   x: 18, y: 10 },
+  { type: 'drone',   x: 22, y: 3 },
   { type: 'spitter', x: 12, y: 19 },
   { type: 'spitter', x: 24, y: 21 },
   { type: 'grunt',   x: 23, y: 17 },
   { type: 'grunt',   x: 10, y: 19 },  // keycard guard
+  { type: 'drone',   x: 26, y: 20 },
   { type: 'grunt',   x: 33, y: 18 },
   { type: 'grunt',   x: 38, y: 24 },
   { type: 'spitter', x: 35, y: 20 },
+  { type: 'drone',   x: 38, y: 18 },
   { type: 'boss',    x: 17, y: 30 },
 ];
 
-// kind: shotgun | plasma | keycard | health | shells | cells | gold | treasure
+// kind: shotgun | plasma | keycard | health | shells | cells | gold | treasure | pipebomb
 export const items = [
   { kind: 'shotgun',  x: 18, y: 7 },
   { kind: 'plasma',   x: 38, y: 21 },
   { kind: 'keycard',  x: 10, y: 21 },
+  { kind: 'pipebomb', x: 22, y: 9 },
+  { kind: 'pipebomb', x: 31, y: 24 },
   { kind: 'health',   x: 3,  y: 4 },
   { kind: 'health',   x: 14, y: 11 },
   { kind: 'health',   x: 33, y: 3 },
@@ -96,6 +108,18 @@ export const npcs = [
 export const crates = [
   { x: 14, y: 3 }, { x: 23, y: 11 }, { x: 9, y: 17 }, { x: 27, y: 21 },
   { x: 31, y: 25 }, { x: 8, y: 30 }, { x: 40, y: 12 }, { x: 28, y: 2 },
+];
+
+// Explosive barrels: shoot to detonate, chain-react, splash-damage anything near.
+export const barrels = [
+  { x: 16, y: 4 }, { x: 20, y: 3 }, { x: 22, y: 11 },
+  { x: 11, y: 18 }, { x: 25, y: 21 }, { x: 32, y: 17 },
+  { x: 30, y: 24 }, { x: 13, y: 30 }, { x: 21, y: 31 },
+];
+
+// Animated toxic-sludge floor rectangles (grid coords, inclusive).
+export const sludge = [
+  { x1: 8, y1: 16, x2: 28, y2: 22 },
 ];
 
 // Point lights: [gx, gy, colorHex, intensity, flicker?]

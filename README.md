@@ -11,7 +11,7 @@ Each experiment lives in its own directory and includes an `ABOUT.md` documentin
 | Experiment | Description | Time | Prompts | Tokens (est.) | Play | Log |
 |---|---|---|---|---|---|---|
 | 🚀 Neon Asteroids | Classic asteroids, neon retro, canvas + Web Audio, keyboard & touch | ~10 min | 3 | ~19k | [play](https://ljack.github.io/fable5-experiments/asteroids/) | [ABOUT](asteroids/ABOUT.md) |
-| ☢️ Toxic Sector | Duke-style 3D FPS — Three.js + GLSL, CC0 PBR textures, monsters, NPC, boss, one-liners (desktop) | ~45 min | 3 | ~95k | [play](https://ljack.github.io/fable5-experiments/dukefps/) | [ABOUT](dukefps/ABOUT.md) |
+| ☢️ Toxic Sector | Duke-style 3D FPS — 2 levels, Three.js + GLSL, AI sprites (monsters, drones, weapons, gore), pipe bombs, barrel chains, infighting, ranks (desktop) | ~2 h | 6 | ~250k | [play](https://ljack.github.io/fable5-experiments/dukefps/) | [ABOUT](dukefps/ABOUT.md) |
 
 ## Structure
 

@@ -127,3 +127,48 @@ viewmodels) with Nano Banana sprites and layered in "gun feel" effects.
 - Verified with `validate.mjs` + headless Playwright: all weapon frames,
   item sprites, and a scripted plasma grunt-kill screenshot-reviewed
   against the previous commit — zero JS errors, no visual regressions.
+
+## v4: Director's Cut — second level, drones, pipe bombs, infighting
+
+A fourth session: full content + combat-depth pass, one autonomous run.
+
+- **Lighting overhaul**: exposure 1.45→0.95, ambient/hemisphere cut to ~40%,
+  denser fog, env-map 0.35→0.18, higher bloom threshold. Halls finally read
+  dark-industrial instead of washed-out grey (judged via before/after
+  headless screenshots).
+- **New enemy — security drone**: AI-generated 4-frame sprite (idle/fly/
+  attack/destroyed). Flies at hover height, strafes sideways at range,
+  fires fast energy bolts, drops and detonates on death.
+- **Explosive barrels**: placed per-level as data, billboard sprites on solid
+  cells; hitscan/projectile rays resolve solid-cell hits to the barrel (shots
+  above barrel height sail over). Detonation = fireball puffs + sparks +
+  flash light + camera shake + radial splash + chained fuses (0.06–0.18 s)
+  on neighbours.
+- **Pipe bombs (slot 4)**: thrown with an arc, bounce off walls/floor,
+  blinking LED accelerates until the 2.2 s fuse pops. Two AI sprites:
+  hand-with-bomb idle, detonator-press fire frame.
+- **Pain states + infighting**: hits can stun monsters (chance scales with
+  damage); monster projectiles carry an `owner`, hits on other monsters set
+  an `infight` target — they chase and kill each other (no score credit,
+  dedicated quip).
+- **Gore gibs**: 4 AI-painted flesh chunks, billboard-tumble in the air,
+  settle flat on the floor; toxic-green blood splat decals under kills.
+- **Hit feedback**: directional damage arrow (rotates around crosshair to
+  point at the attacker), kill-confirm crosshair tick, camera shake on
+  explosions and big hits, red hurt-pulse in the post shader (pre-existing).
+- **Multi-level engine**: `?level=level2` dynamic import; level data now
+  carries meta (name/intro/objective/boss/par/next), sludge rects, barrels,
+  keycard colour. Sludge floors now damage the player standing in them.
+- **Level 2 — THE REACTOR CORE**: 46×40 grid, coolant-moat reactor chamber
+  with a crate core column, east controls wing, BLUE keycard, two secrets,
+  13 barrels, 18 monsters incl. 6 drones, REACTOR PRIME boss, open-sky arena.
+- **End screen**: rank S–D (kills 50% / time-vs-par 30% / secrets 20%),
+  par time, localStorage per-level best, score+weapons carry over to the
+  next sector via sessionStorage.
+- **Ambient music**: detuned saw drone + sub through a swept lowpass; filter
+  cutoff and volume rise with nearby aggroed monsters, sparse industrial
+  clangs in the quiet.
+- Verified per-feature with scripted Playwright runs on both levels (barrel
+  chain, pipe-bomb fuse, drone, infight, boss kill, rank screen, keycard
+  rename) — zero JS errors. Note: headless rAF runs ~3× slower than wall
+  clock; fuse-timing tests must wait in *sim* time.

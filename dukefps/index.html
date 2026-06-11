@@ -35,6 +35,7 @@
   #msg { position: absolute; top: 16%; left: 0; right: 0; text-align: center; color: #cfe; font-size: 17px; letter-spacing: 1px; text-shadow: 0 0 6px #000; opacity: 0; transition: opacity 0.3s; }
   #quip { position: absolute; bottom: 110px; left: 0; right: 0; text-align: center; color: #ff6; font-size: 22px; font-style: italic; font-weight: bold; letter-spacing: 1px; text-shadow: 0 0 10px #f80, 2px 2px 0 #000; opacity: 0; transition: opacity 0.25s; }
   #dmg { position: absolute; inset: 0; background: radial-gradient(ellipse at center, transparent 40%, rgba(255,0,0,0.45) 100%); opacity: 0; }
+  #dmg-arrow { position: absolute; left: 50%; top: 50%; width: 0; height: 0; transform-origin: center; color: #f33; font-size: 46px; text-shadow: 0 0 12px #f00; opacity: 0; transition: opacity 0.2s; transform: translate(-50%,-50%); }
   #pickup-flash { position: absolute; inset: 0; background: rgba(255,255,160,0.18); opacity: 0; }
   #dialog {
     position: absolute; bottom: 130px; left: 50%; transform: translateX(-50%);
@@ -44,6 +45,7 @@
   }
   #dialog .who { color: #6ff; font-weight: bold; letter-spacing: 2px; }
   #dialog .hint { color: #678; font-size: 12px; margin-top: 8px; }
+  #end-rank { font-size: clamp(70px,16vw,150px); font-weight: bold; line-height: 1; margin-bottom: 6px; text-shadow: 0 0 30px currentColor; }
 </style>
 <script type="importmap">
 { "imports": {
@@ -60,6 +62,7 @@
   <div id="msg"></div>
   <div id="quip"></div>
   <div id="dmg"></div>
+  <div id="dmg-arrow">▲</div>
   <div id="pickup-flash"></div>
   <div id="score-line">SCORE 0<div id="key-line"></div></div>
   <div id="dialog"><span class="who"></span><br><span class="text"></span><div class="hint">[E] more</div></div>
@@ -71,26 +74,20 @@
 
 <div class="overlay" id="intro">
   <h1>TOXIC SECTOR</h1>
-  <p>The mutants took over the waste processing plant.<br>
-     Somebody's gotta take out the trash — and the janitor sure isn't armed.<br><br>
-     Find the <b style="color:#f55">RED KEYCARD</b>. Kill the <b style="color:#f55">SLUDGE KING</b>. Reach the exit pad.<br>
-     Rumor says a <b style="color:#fc3">treasure stash</b> is hidden behind a hollow wall…</p>
-  <p class="keys">WASD move · MOUSE look · CLICK shoot · 1/2/3 weapons<br>E use / talk · SPACE jump · SHIFT walk</p>
+  <p id="intro-sub" style="color:#6ff;letter-spacing:3px;font-size:15px;margin-bottom:10px"></p>
+  <p id="intro-body"></p>
+  <p class="keys">WASD move · MOUSE look · CLICK shoot · 1/2/3/4 weapons<br>E use / talk · SPACE jump · SHIFT walk · P quality</p>
   <p class="go">CLICK TO ENTER THE SECTOR</p>
 </div>
 
 <div class="overlay hidden" id="resume"><h1 style="font-size:34px">PAUSED</h1><p class="go">CLICK TO RESUME</p></div>
 
-<div class="overlay hidden" id="victory">
-  <h1>SECTOR CLEANSED</h1>
-  <p id="victory-stats" style="font-size:18px;color:#6ff"></p>
-  <p class="go">CLICK TO PLAY AGAIN</p>
-</div>
-
-<div class="overlay hidden" id="dead">
-  <h1 style="color:#f44;text-shadow:0 0 14px #f00">YOU DIED</h1>
-  <p id="dead-stats" style="font-size:18px;color:#f88"></p>
-  <p class="go">CLICK TO RETRY</p>
+<div class="overlay hidden" id="endscreen">
+  <div id="end-rank"></div>
+  <h1 id="end-title">SECTOR CLEANSED</h1>
+  <p id="end-stats" style="font-size:18px;color:#6ff;line-height:2"></p>
+  <p id="end-best" style="font-size:14px;color:#9ab;margin-top:6px"></p>
+  <p class="go" id="end-go">CLICK TO CONTINUE</p>
 </div>
 
 <script type="module">
@@ -100,9 +97,17 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { CELL, WALL_H, GRID_W, GRID_H, grid, playerStart, doors as doorDefs,
-         monsters as monsterDefs, items as itemDefs, npcs as npcDefs,
-         crates as crateDefs, lights as lightDefs, exit as exitDef, bossArena } from './level.js';
+
+// Dynamic level load: ?level=level2 (default level.js). Carry-over loadout in sessionStorage.
+const PARAMS = new URLSearchParams(location.search);
+const LEVEL_FILE = (PARAMS.get('level') || 'level').replace(/[^a-z0-9]/gi, '');
+const L = await import(`./${LEVEL_FILE}.js`);
+const { CELL, WALL_H, GRID_W, GRID_H, grid, playerStart, meta,
+        doors: doorDefs, monsters: monsterDefs, items: itemDefs, npcs: npcDefs,
+        crates: crateDefs, lights: lightDefs, exit: exitDef, bossArena,
+        barrels: barrelDefs = [], sludge: sludgeDefs = [] } = L;
+const KEY_COLOR = meta.keyColor ?? 0xff3333;
+const KEY_NAME = meta.keyName ?? 'RED KEYCARD';
 
 // ============================== UTIL ==============================
 const TAU = Math.PI * 2;
@@ -153,6 +158,27 @@ const sfx = {
   win:     () => { [523, 659, 784, 1047].forEach((f, i) => beep(f, 0.22, 'square', 0.08, 0, i * 0.13)); },
 };
 
+// ---- ambient music: low detuned drone through a swept lowpass; combat raises the cutoff ----
+let music = null;
+function startMusic() {
+  if (music) return;
+  try {
+    const a = audio();
+    const master = a.createGain(); master.gain.value = 0.05; master.connect(a.destination);
+    const filt = a.createBiquadFilter(); filt.type = 'lowpass'; filt.frequency.value = 160; filt.Q.value = 5;
+    filt.connect(master);
+    for (const [f, type, vol] of [[55, 'sawtooth', 0.32], [55.7, 'sawtooth', 0.32], [27.5, 'sine', 0.7]]) {
+      const o = a.createOscillator(); o.type = type; o.frequency.value = f;
+      const g = a.createGain(); g.gain.value = vol;
+      o.connect(g).connect(filt); o.start();
+    }
+    const lfo = a.createOscillator(); lfo.frequency.value = 0.07;
+    const lfoG = a.createGain(); lfoG.gain.value = 50;
+    lfo.connect(lfoG).connect(filt.frequency); lfo.start();
+    music = { filt, master, intensity: 0, clangT: 5 };
+  } catch (e) {}
+}
+
 // ---- one-liners (text + speech synth) ----
 const quipEl = document.getElementById('quip');
 let quipTimer = null, lastQuipAt = 0;
@@ -188,7 +214,7 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.45;
+renderer.toneMappingExposure = 0.95;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -196,7 +222,7 @@ let QUALITY = true; // P toggles post+shadows
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x05060a);
-scene.fog = new THREE.FogExp2(0x070a10, 0.016);
+scene.fog = new THREE.FogExp2(0x05080c, 0.024);
 
 const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.1, 300);
 camera.rotation.order = 'YXZ';
@@ -208,8 +234,10 @@ addEventListener('resize', () => {
   composer.setSize(innerWidth, innerHeight);
 });
 
-scene.add(new THREE.AmbientLight(0x36465a, 2.4));
-scene.add(new THREE.HemisphereLight(0x44607a, 0x1a120c, 1.1));
+// dim base light so colored point lights and emissive panels carry the mood;
+// halls read dark + industrial instead of flat grey wash.
+scene.add(new THREE.AmbientLight(0x2a3340, 1.1));
+scene.add(new THREE.HemisphereLight(0x2c3c50, 0x100a06, 0.55));
 
 // ============================== TEXTURES ==============================
 const texLoader = new THREE.TextureLoader();
@@ -243,7 +271,7 @@ texLoader.load('assets/sprites/skybox.jpg', t => {
   scene.background = t;
   scene.environment = t; // env-map gloss: metal actually reflects now
   for (const m of [matWallA, matWallB, matWallC, matFloor, matCeil, matCrate, matDoor, matCeilTile])
-    m.envMapIntensity = 0.35;
+    m.envMapIntensity = 0.18;
 });
 
 function spriteTex(name) {
@@ -325,9 +353,10 @@ const inBossArena = (x, y) => x >= bossArena.x1 && x <= bossArena.x2 && y >= bos
   scene.add(inst);
 
   // cool sky light spilling into the open boss arena
-  const moon = new THREE.DirectionalLight(0x8aa7cc, 1.6);
-  moon.position.set(cx(17) + 14, 30, cx(30) - 10);
-  moon.target.position.set(cx(17), 0, cx(30));
+  const bcx = (bossArena.x1 + bossArena.x2) / 2, bcy = (bossArena.y1 + bossArena.y2) / 2;
+  const moon = new THREE.DirectionalLight(0x8aa7cc, 1.15);
+  moon.position.set(cx(bcx) + 14, 30, cx(bcy) - 10);
+  moon.target.position.set(cx(bcx), 0, cx(bcy));
   moon.castShadow = true;
   moon.shadow.mapSize.set(1024, 1024);
   moon.shadow.camera.left = -55; moon.shadow.camera.right = 55;
@@ -335,10 +364,10 @@ const inBossArena = (x, y) => x >= bossArena.x1 && x <= bossArena.x2 && y >= bos
   scene.add(moon, moon.target);
 }
 
-// toxic sludge (GLSL shader) in the spitter hall
+// toxic sludge (GLSL shader) — one mesh per level-defined sludge rect
 const sludgeUniforms = { uTime: { value: 0 } };
-{
-  const x1 = 8, y1 = 16, x2 = 28, y2 = 22;
+for (const sl of sludgeDefs) {
+  const { x1, y1, x2, y2 } = sl;
   const w = (x2 - x1 + 1) * CELL, h = (y2 - y1 + 1) * CELL;
   const mat = new THREE.ShaderMaterial({
     uniforms: sludgeUniforms,
@@ -352,8 +381,8 @@ const sludgeUniforms = { uTime: { value: 0 } };
       void main() {
         vec2 p = vUv * 8.0;
         float v = n(p) + n(p * 2.1 + 13.7) * 0.4;
-        vec3 col = mix(vec3(0.02, 0.20, 0.04), vec3(0.25, 0.95, 0.18), smoothstep(-0.6, 1.4, v));
-        col += vec3(0.4, 1.0, 0.3) * pow(smoothstep(0.8, 1.6, v), 3.0) * 0.7;
+        vec3 col = mix(vec3(0.01, 0.12, 0.025), vec3(0.16, 0.6, 0.11), smoothstep(-0.6, 1.4, v));
+        col += vec3(0.25, 0.65, 0.2) * pow(smoothstep(0.8, 1.6, v), 3.0) * 0.7;
         gl_FragColor = vec4(col, 0.92);
       }`,
     transparent: true,
@@ -364,13 +393,11 @@ const sludgeUniforms = { uTime: { value: 0 } };
   scene.add(m);
 }
 
-const billboards = []; // simple Y-billboarded planes (barrels)
-
 // point lights + emissive ceiling panels
 for (const [gx, gy, color, intensity, flicker] of lightDefs) {
-  const l = new THREE.PointLight(color, intensity * 2.2, 32, 1.4);
+  const l = new THREE.PointLight(color, intensity * 2.0, 30, 1.6);
   l.position.set(cx(gx), WALL_H - 0.7, cx(gy));
-  l.userData.flicker = flicker; l.userData.base = intensity * 2.2;
+  l.userData.flicker = flicker; l.userData.base = intensity * 2.0;
   scene.add(l);
   const panel = new THREE.Mesh(
     new THREE.PlaneGeometry(1.6, 1.6),
@@ -383,8 +410,7 @@ for (const [gx, gy, color, intensity, flicker] of lightDefs) {
 const allLights = [];
 scene.traverse(o => { if (o.isPointLight) allLights.push(o); });
 
-// crates (with toxic barrel sprite on top of some)
-const barrelTex = spriteTex('barrel');
+// crates
 for (const [i, c] of crateDefs.entries()) {
   const s = CELL * 0.8;
   const m = new THREE.Mesh(new THREE.BoxGeometry(s, s * 0.75, s), matCrate);
@@ -393,14 +419,26 @@ for (const [i, c] of crateDefs.entries()) {
   m.castShadow = m.receiveShadow = true;
   scene.add(m);
   solidCells.add(key(c.x, c.y));
-  if (i % 2 === 0) {
-    const bh = 1.5;
-    const b = new THREE.Mesh(new THREE.PlaneGeometry(bh * 304/384, bh), spriteMat(barrelTex));
-    b.position.set(cx(c.x), s * 0.75 + bh / 2, cx(c.y));
-    scene.add(b);
-    billboards.push(b);
-  }
 }
+
+// explosive barrels: Y-billboard sprites, shoot to detonate, chain-react with splash damage
+const barrelTex = spriteTex('barrel');
+const barrelByCell = new Map(); // cell key -> barrel (cells are solid; rays resolve to the barrel)
+const barrels = barrelDefs.map(b => {
+  const bh = 1.7;
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(bh * 304/384, bh), spriteMat(barrelTex, { emissiveIntensity: 0.25 }));
+  mesh.position.set(cx(b.x), bh / 2, cx(b.y));
+  mesh.castShadow = true;
+  scene.add(mesh);
+  solidCells.add(key(b.x, b.y));
+  const obj = { gx: b.x, gy: b.y, x: cx(b.x), z: cx(b.y), mesh, hp: 14, dead: false, fuse: -1 };
+  barrelByCell.set(key(b.x, b.y), obj);
+  return obj;
+});
+const barrelAt = (gx, gy) => {
+  const b = barrelByCell.get(key(gx, gy));
+  return b && !b.dead ? b : null;
+};
 
 // wall decals (warning signs sheet) on walls facing open floor
 {
@@ -442,7 +480,7 @@ for (const d of doorDefs) {
   const geoW = d.secret ? CELL : (d.axis === 'x' ? 0.7 : CELL);
   const geoD = d.secret ? CELL : (d.axis === 'x' ? CELL : 0.7);
   const mat = d.secret ? matWallA : (d.locked ? matDoor.clone() : matDoor);
-  if (d.locked) { mat.emissive = new THREE.Color(0x550000); mat.emissiveIntensity = 0.6; }
+  if (d.locked) { mat.emissive = new THREE.Color(KEY_COLOR); mat.emissiveIntensity = 0.6; }
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(geoW, WALL_H, geoD), mat);
   mesh.position.set(cx(d.x), WALL_H / 2, cx(d.y));
   scene.add(mesh);
@@ -468,18 +506,25 @@ const ITEM_DEFS = { // a = aspect from processed PNGs, h = world height, glow co
   keycard:  { a: 289/156, h: 0.42, glow: 0xff3333 },
   shotgun:  { a: 336/175, h: 0.55, glow: 0xffaa55 },
   plasma:   { a: 300/120, h: 0.5,  glow: 0x00ffee },
+  pipebomb: { a: 358/256, h: 0.5,  glow: 0xff4422 },
 };
 function makePickupMesh(kind) {
   const d = ITEM_DEFS[kind];
+  const glow = kind === 'keycard' ? KEY_COLOR : d.glow;
   const g = new THREE.Group();
   const halo = new THREE.Sprite(new THREE.SpriteMaterial({
-    map: glowTex, color: d.glow, transparent: true, opacity: 0.35,
+    map: glowTex, color: glow, transparent: true, opacity: 0.35,
     blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
   }));
   halo.scale.setScalar(d.h * 2.1);
   g.add(halo);
-  g.add(new THREE.Mesh(new THREE.PlaneGeometry(d.h * d.a, d.h),
-    spriteMat(spriteTex(`item_${kind}`), { emissiveIntensity: 0.55 })));
+  const plane = new THREE.Mesh(new THREE.PlaneGeometry(d.h * d.a, d.h),
+    spriteMat(spriteTex(`item_${kind}`), { emissiveIntensity: 0.55 }));
+  if (kind === 'keycard' && KEY_COLOR !== 0xff3333) {
+    plane.material.color.setHex(KEY_COLOR); // recolor the red keycard art for other levels
+    plane.material.emissive.setHex(KEY_COLOR);
+  }
+  g.add(plane);
   g.userData.halo = halo;
   return g;
 }
@@ -492,32 +537,36 @@ const pickups = itemDefs.map(it => {
 
 // ============================== MONSTERS (Nano Banana sprite billboards) ==============================
 const MON_FRAMES = {};
-for (const type of ['grunt', 'spitter', 'boss'])
+for (const type of ['grunt', 'spitter', 'boss', 'drone'])
   MON_FRAMES[type] = Object.fromEntries(['idle', 'walk', 'attack', 'die'].map(f => [f, spriteTex(`${type}_${f}`)]));
-const MON_HEIGHT = { grunt: 2.4, spitter: 1.7, boss: 4.6 };
+const MON_HEIGHT = { grunt: 2.4, spitter: 1.7, boss: 4.6, drone: 1.5 };
 const MON_ASPECT = { // frame width/height ratios from the processed sprites
   grunt:   { idle: 265/430, walk: 312/415, attack: 386/427, die: 435/376 },
   spitter: { idle: 408/362, walk: 401/359, attack: 465/357, die: 477/256 },
   boss:    { idle: 446/448, walk: 398/455, attack: 451/437, die: 441/431 },
+  drone:   { idle: 420/276, walk: 405/273, attack: 421/315, die: 435/348 },
 };
 function makeMonsterMesh(type) {
   const mat = spriteMat(MON_FRAMES[type].idle);
   const h = MON_HEIGHT[type];
+  const fly = type === 'drone';
+  const baseY = fly ? 2.0 : 0; // hover height for flyers (mesh anchored at center then)
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat);
   mesh.scale.set(h * MON_ASPECT[type].idle, h, 1);
-  mesh.position.y = h / 2;
+  mesh.position.y = fly ? baseY : h / 2;
   mesh.castShadow = true;
   const g = new THREE.Group();
   g.add(mesh);
   g.userData.sprite = mesh;
+  g.userData.fly = fly;
   g.userData.setFrame = f => {
     if (g.userData.frame === f) return;
     g.userData.frame = f;
     mat.map = mat.emissiveMap = MON_FRAMES[type][f];
     const ar = MON_ASPECT[type][f];
-    const hh = f === 'die' ? h * 0.55 : h;
+    const hh = (f === 'die' && !fly) ? h * 0.55 : h;
     mesh.scale.set(hh * ar, hh, 1);
-    mesh.position.y = hh / 2;
+    mesh.position.y = fly ? baseY : hh / 2;
   };
   g.userData.frame = 'idle';
   return g;
@@ -526,6 +575,7 @@ const MON_STATS = {
   grunt:   { hp: 30,  speed: 3.2, radius: 0.55, attackRange: 18, attackCd: 1.4, dmg: 8,  score: 100, aggro: 22 },
   spitter: { hp: 50,  speed: 2.2, radius: 0.75, attackRange: 16, attackCd: 2.0, dmg: 12, score: 150, aggro: 20 },
   boss:    { hp: 400, speed: 2.6, radius: 1.35, attackRange: 24, attackCd: 1.8, dmg: 18, score: 1000, aggro: 30 },
+  drone:   { hp: 22,  speed: 4.6, radius: 0.5,  attackRange: 20, attackCd: 1.1, dmg: 6,  score: 120, aggro: 26, fly: true },
 };
 const monsters = monsterDefs.map(md => {
   const mesh = makeMonsterMesh(md.type);
@@ -533,7 +583,8 @@ const monsters = monsterDefs.map(md => {
   scene.add(mesh);
   return { type: md.type, ...MON_STATS[md.type], maxHp: MON_STATS[md.type].hp,
            x: cx(md.x), z: cx(md.y), mesh, dead: false, cd: rand(0.5, 1.5),
-           aggroed: false, bob: rand(0, TAU), hitFlash: 0, attackAnim: 0 };
+           aggroed: false, bob: rand(0, TAU), hitFlash: 0, attackAnim: 0,
+           painT: 0, strafe: Math.random() < 0.5 ? 1 : -1, infight: null };
 });
 
 // ============================== NPC (sprite billboard) ==============================
@@ -566,12 +617,14 @@ const weapons = {
   pistol:  { name: 'BLASTER',      dmg: 12, cd: 0.28, ammo: Infinity, pellets: 1, spread: 0.012, viewmodel: null, owned: true },
   shotgun: { name: 'BOOMSTICK',    dmg: 8,  cd: 0.85, ammo: 0, pellets: 7, spread: 0.07, viewmodel: null, owned: false },
   plasma:  { name: 'PLASMA RIFLE', dmg: 22, cd: 0.16, ammo: 0, pellets: 1, spread: 0.02, viewmodel: null, owned: false, projectile: true },
+  pipebomb:{ name: 'PIPE BOMBS',   dmg: 0,  cd: 0.8,  ammo: 0, pellets: 1, spread: 0, viewmodel: null, owned: false, thrown: true },
 };
 // Nano Banana first-person weapon sprites (idle/fire/pump frames)
 const VM_DEFS = {
   pistol:  { frames: ['idle', 'fire'],         aspect: 448/512, flash: 0x88ffff, tracer: 0xaaffff },
   shotgun: { frames: ['idle', 'fire', 'pump'], aspect: 390/512, flash: 0xffaa33, tracer: 0xffcc88 },
   plasma:  { frames: ['idle', 'fire'],         aspect: 448/512, flash: 0x33ffdd, tracer: 0x66ffee },
+  pipebomb:{ frames: ['idle', 'fire'],         aspect: 512/512, flash: 0xffffff, tracer: 0xffffff },
 };
 function makeViewmodel(kind) {
   const d = VM_DEFS[kind];
@@ -596,6 +649,7 @@ scene.add(camera);
 weapons.pistol.viewmodel = makeViewmodel('pistol');
 weapons.shotgun.viewmodel = makeViewmodel('shotgun');
 weapons.plasma.viewmodel = makeViewmodel('plasma');
+weapons.pipebomb.viewmodel = makeViewmodel('pipebomb');
 let currentWeapon = 'pistol';
 weapons.pistol.viewmodel.visible = true;
 
@@ -620,6 +674,7 @@ addEventListener('keydown', e => {
   if (e.code === 'Digit1') switchWeapon('pistol');
   if (e.code === 'Digit2') switchWeapon('shotgun');
   if (e.code === 'Digit3') switchWeapon('plasma');
+  if (e.code === 'Digit4') switchWeapon('pipebomb');
   if (e.code === 'KeyE') useKey();
   if (e.code === 'Space') e.preventDefault();
 });
@@ -644,17 +699,35 @@ document.addEventListener('pointerlockchange', () => {
 });
 function requestLock() { if (TEST) { locked = true; return; } canvas.requestPointerLock(); }
 
+// ---- per-level intro text + carry-over loadout ----
+document.querySelector('#intro h1').textContent = `TOXIC SECTOR — ${meta.name}`;
+document.getElementById('intro-sub').textContent = `SECTOR ${meta.id}`;
+document.getElementById('intro-body').innerHTML =
+  `${meta.intro}<br><br>${meta.objective}<br>Rumor says <b style="color:#fc3">treasure</b> hides behind hollow walls…`;
+// carry score + weapons + ammo forward between levels
+try {
+  const carry = JSON.parse(sessionStorage.getItem('toxic_carry') || 'null');
+  if (carry) {
+    player.score = carry.score | 0;
+    for (const k of ['shotgun', 'plasma', 'pipebomb']) {
+      if (carry[k]) { weapons[k].owned = true; weapons[k].ammo = carry[k].ammo; }
+    }
+    sessionStorage.removeItem('toxic_carry');
+  }
+} catch (e) {}
+
 document.getElementById('intro').addEventListener('click', function () {
   this.classList.add('hidden');
   started = true;
   player.startTime = performance.now();
   audio();
+  startMusic();
   requestLock();
-  setTimeout(() => quip("Time to take out the trash!", true), 600);
+  setTimeout(() => quip(meta.id === 1 ? "Time to take out the trash!" : "Round two, mutants.", true), 600);
 });
 document.getElementById('resume').addEventListener('click', requestLock);
-document.getElementById('victory').addEventListener('click', () => location.reload());
-document.getElementById('dead').addEventListener('click', () => location.reload());
+let endAction = null;
+document.getElementById('endscreen').addEventListener('click', () => { if (endAction) endAction(); });
 
 function switchWeapon(w) {
   if (!weapons[w].owned || w === currentWeapon) return;
@@ -703,9 +776,10 @@ const mkProjMat = c => new THREE.MeshBasicMaterial({ color: c, toneMapped: false
 const enemyProjMat = mkProjMat(0x88ff33);
 const bossProjMat = mkProjMat(0xff5533);
 const plasmaProjMat = mkProjMat(0x33ffee);
+const droneProjMat = mkProjMat(0x66ffcc);
 let projLights = 0; // cap concurrent projectile point lights
 
-function spawnProjectile(x, y, z, dir, speed, dmg, hostile, mat) {
+function spawnProjectile(x, y, z, dir, speed, dmg, hostile, mat, owner = null) {
   const mesh = new THREE.Mesh(projGeo, mat);
   mesh.scale.setScalar(hostile ? 1.6 : 1.2);
   mesh.position.set(x, y, z);
@@ -719,7 +793,7 @@ function spawnProjectile(x, y, z, dir, speed, dmg, hostile, mat) {
   let light = null;
   if (projLights < 6) { light = new THREE.PointLight(color, 2.2, 8); mesh.add(light); projLights++; }
   scene.add(mesh);
-  projectiles.push({ mesh, vx: dir.x * speed, vy: dir.y * speed, vz: dir.z * speed, dmg, hostile, life: 3, color, light, trailT: 0 });
+  projectiles.push({ mesh, vx: dir.x * speed, vy: dir.y * speed, vz: dir.z * speed, dmg, hostile, life: 3, color, light, trailT: 0, owner });
 }
 
 // ---- tracers (hitscan streaks) ----
@@ -808,6 +882,99 @@ function spawnGibs(x, y, z, color, count) {
   }
 }
 
+// ---- gore gibs (Nano Banana flesh chunks, Y-billboarded, tumbling) ----
+const goreTex = ['gib_0', 'gib_1', 'gib_2', 'gib_3'].map(spriteTex);
+const goreGibs = [];
+function spawnGore(x, y, z, count, big = false) {
+  for (let i = 0; i < count; i++) {
+    const tex = goreTex[(Math.random() * goreTex.length) | 0];
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1),
+      spriteMat(tex, { emissiveIntensity: 0.45 }));
+    const s = rand(0.3, 0.55) * (big ? 1.6 : 1);
+    m.scale.set(s, s, 1);
+    m.position.set(x, y, z);
+    scene.add(m);
+    goreGibs.push({ mesh: m, vx: rand(-5, 5), vy: rand(3, 8), vz: rand(-5, 5),
+                    spin: rand(-8, 8), life: rand(1.2, 2.2), rest: false });
+  }
+}
+// blood splat decals on the floor (reuse decal pool look, green toxic blood)
+const bloodTex = radialTex([[0, 'rgba(40,180,40,0.85)'], [0.5, 'rgba(60,140,30,0.5)'], [1, 'rgba(0,0,0,0)']]);
+function spawnBloodSplat(x, z) {
+  if (decals.length >= 40) { const d = decals.shift(); scene.remove(d.mesh); }
+  const m = new THREE.Mesh(decalGeo, new THREE.MeshBasicMaterial({ map: bloodTex, transparent: true, depthWrite: false, opacity: 0.85 }));
+  m.scale.setScalar(rand(0.8, 1.4));
+  m.rotation.x = -Math.PI / 2; m.rotation.z = rand(0, TAU);
+  m.position.set(x, 0.05, z);
+  scene.add(m);
+  decals.push({ mesh: m, life: 12 });
+}
+
+// ---- explosions: visual burst + radial splash damage + chain detonation ----
+let camShake = 0;
+const EXPLO_RADIUS = 5.5, EXPLO_DMG = 90;
+function explode(x, y, z, opts = {}) {
+  const radius = opts.radius ?? EXPLO_RADIUS;
+  const dmg = opts.dmg ?? EXPLO_DMG;
+  sfx.boom();
+  spawnPuff(x, y, z, 0xffdd66, radius * 0.9, 0.35);
+  spawnPuff(x, y, z, 0xff5522, radius * 1.3, 0.5);
+  spawnSparks(x, y, z, 0xffaa33, 18);
+  spawnGibs(x, y, z, 0x553311, 10);
+  // flash light
+  const fl = new THREE.PointLight(0xffaa44, 60, radius * 4);
+  fl.position.set(x, y, z); scene.add(fl);
+  flashes.push({ light: fl, life: 0.22, max: 0.22 });
+  // camera shake scaled by proximity
+  const pd = Math.hypot(x - player.x, z - player.z);
+  camShake = Math.max(camShake, clamp(1 - pd / (radius * 3), 0, 1) * 0.9);
+  // splash damage: monsters
+  for (const m of monsters) {
+    if (m.dead) continue;
+    const d = Math.hypot(x - m.x, z - m.z);
+    if (d < radius) {
+      const falloff = 1 - d / radius;
+      damageMonster(m, dmg * falloff, m.x, 1.2, m.z, true);
+    }
+  }
+  // splash damage: player
+  const pdd = Math.hypot(x - player.x, z - player.z);
+  if (pdd < radius) hurtPlayer(Math.round(dmg * 0.5 * (1 - pdd / radius)), x, z);
+  // chain: nearby barrels get a short fuse
+  for (const b of barrels) {
+    if (b.dead || b.fuse >= 0) continue;
+    if (Math.hypot(x - b.x, z - b.z) < radius + 1.5) b.fuse = rand(0.06, 0.18);
+  }
+}
+function detonateBarrel(b) {
+  if (b.dead) return;
+  b.dead = true;
+  scene.remove(b.mesh);
+  solidCells.delete(key(b.gx, b.gy));
+  explode(b.x, 1.0, b.z);
+}
+
+// transient explosion flash-lights
+const flashes = [];
+
+// hit a barrel with damage (hitscan/projectile/splash) — returns true if barrel was there
+function damageBarrel(b, dmg) {
+  if (b.dead) return;
+  b.hp -= dmg;
+  b.mesh.material.color.setRGB(3, 1.2, 1.2);
+  setTimeout(() => { if (!b.dead) b.mesh.material.color.setRGB(1, 1, 1); }, 70);
+  if (b.hp <= 0) detonateBarrel(b);
+}
+
+// kill confirm tick (crosshair flash + blip)
+const crosshairEl = document.getElementById('crosshair');
+function killTick() {
+  crosshairEl.style.color = '#ff5';
+  crosshairEl.style.transform = 'translate(-50%,-50%) scale(1.6)';
+  beep(1200, 0.05, 'square', 0.05);
+  setTimeout(() => { crosshairEl.style.color = '#6f6'; crosshairEl.style.transform = 'translate(-50%,-50%) scale(1)'; }, 110);
+}
+
 function fire() {
   const w = weapons[currentWeapon];
   if (player.fireCd > 0) return;
@@ -816,15 +983,23 @@ function fire() {
   if (w.ammo !== Infinity) w.ammo--;
   player.kick = 1;
   w.sinceFire = 0;
+
+  const fwd = new THREE.Vector3();
+  camera.getWorldDirection(fwd);
+
+  if (w.thrown) { // pipe bomb: lob a grenade with an arc
+    sfx.pickup();
+    throwPipeBomb(fwd);
+    updateHud();
+    return;
+  }
+
   muzzle.color.set(VM_DEFS[currentWeapon].flash);
   muzzle.intensity = 30;
   const mzl = muzzleWorld();
   spawnPuff(mzl.x, mzl.y, mzl.z, VM_DEFS[currentWeapon].flash, 0.5, 0.08);
   if (currentWeapon !== 'plasma') ejectCasing(currentWeapon === 'shotgun');
   (currentWeapon === 'shotgun' ? sfx.shotgun : currentWeapon === 'plasma' ? sfx.plasma : sfx.pistol)();
-
-  const fwd = new THREE.Vector3();
-  camera.getWorldDirection(fwd);
 
   if (w.projectile) {
     const dir = fwd.clone();
@@ -843,21 +1018,42 @@ function fire() {
   updateHud();
 }
 
+// ---- pipe bombs (thrown grenades, gravity + bounce, fuse) ----
+const pipeBombs = [];
+const pbGeo = new THREE.CylinderGeometry(0.08, 0.08, 0.32, 8);
+const pbMat = new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 0.7, roughness: 0.4, emissive: 0xff0000, emissiveIntensity: 0.4 });
+function throwPipeBomb(fwd) {
+  const m = new THREE.Mesh(pbGeo, pbMat.clone());
+  m.position.set(player.x + fwd.x * 0.6, player.y - 0.1, player.z + fwd.z * 0.6);
+  scene.add(m);
+  pipeBombs.push({
+    mesh: m, vx: fwd.x * 16, vy: 5 + fwd.y * 14, vz: fwd.z * 16,
+    fuse: 2.2, blink: 0,
+  });
+}
+
 function hitscan(dir, dmg, color) {
   let x = player.x, y = player.y, z = player.z;
   for (let i = 0; i < 300; i++) {
     x += dir.x * 0.25; y += dir.y * 0.25; z += dir.z * 0.25;
     if (y < 0 || y > WALL_H) break;
-    if (cellSolid(Math.floor(x / CELL), Math.floor(z / CELL))) {
-      spawnSparks(x - dir.x * 0.2, y - dir.y * 0.2, z - dir.z * 0.2, 0xffcc66, 5);
-      spawnPuff(x - dir.x * 0.25, y - dir.y * 0.25, z - dir.z * 0.25, 0xffaa55, 0.3, 0.12);
-      spawnDecal(x - dir.x * 0.22, y - dir.y * 0.22, z - dir.z * 0.22, dir);
-      break;
+    const gx = Math.floor(x / CELL), gz = Math.floor(z / CELL);
+    if (cellSolid(gx, gz)) {
+      const b = barrelAt(gx, gz); // barrel cells are solid; the "wall" is the barrel
+      if (b) {
+        if (y < 2.2) { damageBarrel(b, dmg); break; }
+        // above barrel height: shot sails over it — keep marching
+      } else {
+        spawnSparks(x - dir.x * 0.2, y - dir.y * 0.2, z - dir.z * 0.2, 0xffcc66, 5);
+        spawnPuff(x - dir.x * 0.25, y - dir.y * 0.25, z - dir.z * 0.25, 0xffaa55, 0.3, 0.12);
+        spawnDecal(x - dir.x * 0.22, y - dir.y * 0.22, z - dir.z * 0.22, dir);
+        break;
+      }
     }
     let hit = false;
     for (const m of monsters) {
       if (m.dead) continue;
-      const cy = m.type === 'boss' ? 1.8 : 1.1;
+      const cy = m.type === 'boss' ? 1.8 : m.fly ? (m.mesh.position.y || 2) : 1.1;
       const hr = m.radius + 0.25;
       if ((x - m.x) ** 2 + (y - cy) ** 2 * 0.5 + (z - m.z) ** 2 < hr * hr) {
         damageMonster(m, dmg, x, y, z);
@@ -869,27 +1065,42 @@ function hitscan(dir, dmg, color) {
   spawnTracer(muzzleWorld(), x, y, z, color);
 }
 
-function damageMonster(m, dmg, hx, hy, hz) {
+function damageMonster(m, dmg, hx, hy, hz, splash = false, attacker = null) {
+  if (m.dead) return;
   m.hp -= dmg;
   m.hitFlash = 0.12;
   m.aggroed = true;
+  // pain state: chance to flinch (interrupts movement/attack briefly), bigger on heavy hits
+  if (m.type !== 'boss' && Math.random() < clamp(dmg / 40, 0.15, 0.85)) m.painT = rand(0.18, 0.4);
+  // infighting: if hurt by another monster, retaliate against it
+  if (attacker && attacker !== m) m.infight = attacker;
   sfx.mHit();
-  spawnGibs(hx ?? m.x, hy ?? 1.2, hz ?? m.z, 0x33cc22, 4);
+  if (!splash) spawnGore(hx ?? m.x, hy ?? 1.2, hz ?? m.z, 2);
+  spawnGibs(hx ?? m.x, hy ?? 1.2, hz ?? m.z, 0x33cc22, 3);
   if (m.hp <= 0 && !m.dead) {
     m.dead = true;
-    player.kills++;
-    player.score += m.score;
+    m.infight = null;
+    if (!attacker) { // player-caused kills score; infight kills don't
+      player.kills++;
+      player.score += m.score;
+      killTick();
+    } else if (Math.random() < 0.6) {
+      quip('Yeah! Fight each other, morons!');
+    }
     sfx.mDie();
-    spawnGibs(m.x, 1.2, m.z, 0x33cc22, m.type === 'boss' ? 40 : 14);
+    spawnGore(m.x, 1.2, m.z, m.type === 'boss' ? 18 : 6, m.type === 'boss');
+    spawnGibs(m.x, 1.2, m.z, 0x33cc22, m.type === 'boss' ? 30 : 8);
+    spawnBloodSplat(m.x, m.z);
+    if (m.type === 'drone') explode(m.x, m.mesh.position.y || 2, m.z, { radius: 3, dmg: 25 });
     if (m.type === 'boss') {
       sfx.boom();
       quip('The king is dead. Long live the janitor!', true);
-      msg('THE SLUDGE KING IS DEAD — EXIT PAD ACTIVE', 4000);
+      msg(`THE ${meta.bossName || 'SLUDGE KING'} IS DEAD — EXIT ACTIVE`, 4000);
       exitMat.color.set(0x22ff44);
       exitMat.emissive.set(0x00ff33);
       exitMat.emissiveIntensity = 2;
       for (const d of doorObjs) d.sealed = false;
-    } else if (Math.random() < 0.45) {
+    } else if (Math.random() < 0.45 && !attacker) {
       quip(KILL_QUIPS[Math.floor(Math.random() * KILL_QUIPS.length)]);
     }
     updateHud();
@@ -898,22 +1109,30 @@ function damageMonster(m, dmg, hx, hy, hz) {
 
 // ============================== DAMAGE TO PLAYER ==============================
 const dmgEl = document.getElementById('dmg');
-function hurtPlayer(dmg) {
+const dmgArrowEl = document.getElementById('dmg-arrow');
+function hurtPlayer(dmg, srcX, srcZ) {
   if (player.dead || gameEnded) return;
   player.hp -= dmg;
   hurtPulse = 1;
+  camShake = Math.max(camShake, clamp(dmg / 30, 0.1, 0.6));
   sfx.hurt();
   dmgEl.style.opacity = 1;
   setTimeout(() => dmgEl.style.opacity = 0, 220);
+  // directional damage indicator: arrow points toward the hit source
+  if (srcX !== undefined) {
+    const ang = Math.atan2(srcX - player.x, -(srcZ - player.z)); // world bearing
+    const rel = ang - player.yaw; // relative to facing
+    dmgArrowEl.style.transform = `translate(-50%,-50%) rotate(${rel}rad) translateY(-170px)`;
+    dmgArrowEl.style.opacity = 1;
+    clearTimeout(dmgArrowEl._t);
+    dmgArrowEl._t = setTimeout(() => dmgArrowEl.style.opacity = 0, 600);
+  }
   if (player.hp <= 25 && player.hp > 0) quip("I'm gonna need a bigger med-kit…");
   if (player.hp <= 0) {
     player.hp = 0;
     player.dead = true; gameEnded = true;
     document.exitPointerLock();
-    document.getElementById('dead-stats').textContent =
-      `SCORE ${player.score} · KILLS ${player.kills}/${monsters.length} · the sector wins this round`;
-    document.getElementById('dead').classList.remove('hidden');
-    document.getElementById('resume').classList.add('hidden');
+    showEndScreen(false);
   }
   updateHud();
 }
@@ -970,7 +1189,7 @@ function updateHud() {
   ammoEl.textContent = w.ammo === Infinity ? '∞' : w.ammo;
   weaponEl.textContent = w.name;
   scoreEl.firstChild.textContent = 'SCORE ' + player.score;
-  keyEl.textContent = player.keycard ? '🔑 RED KEYCARD' : '';
+  keyEl.textContent = player.keycard ? '🔑 ' + KEY_NAME : '';
 }
 updateHud();
 
@@ -987,9 +1206,10 @@ function takePickup(p) {
     case 'cells':    weapons.plasma.ammo += 30; sfx.pickup(); msg('+30 CELLS'); break;
     case 'gold':     player.score += 100; sfx.gold(); msg('+100 GOLD'); if (Math.random() < 0.4) quip('Ka-ching!'); break;
     case 'treasure': player.score += 500; sfx.gold(); msg('+500 TREASURE!'); quip('Shiny!'); break;
-    case 'keycard':  player.keycard = true; sfx.secret(); msg('RED KEYCARD ACQUIRED', 3000); quip('Access granted, baby!', true); break;
+    case 'keycard':  player.keycard = true; sfx.secret(); msg(KEY_NAME + ' ACQUIRED', 3000); quip('Access granted, baby!', true); break;
     case 'shotgun':  weapons.shotgun.owned = true; weapons.shotgun.ammo += 8; sfx.pickup(); msg('GOT THE BOOMSTICK  [2]', 3000); quip('Now THIS is a weapon!', true); switchWeapon('shotgun'); break;
     case 'plasma':   weapons.plasma.owned = true; weapons.plasma.ammo += 40; sfx.pickup(); msg('GOT THE PLASMA RIFLE  [3]', 3000); quip('Groovy.', true); switchWeapon('plasma'); break;
+    case 'pipebomb': { const had = weapons.pipebomb.owned; weapons.pipebomb.owned = true; weapons.pipebomb.ammo += 3; sfx.pickup(); msg('+3 PIPE BOMBS  [4]', 3000); if (!had) { quip('Boom-mop time.', true); switchWeapon('pipebomb'); } break; }
   }
   updateHud();
 }
@@ -1028,9 +1248,13 @@ function update(dt) {
   player.kick = Math.max(0, player.kick - dt * 6);
   muzzle.intensity = Math.max(0, muzzle.intensity - dt * 250);
 
-  camera.position.set(player.x, player.y + Math.sin(player.bobPhase) * 0.045, player.z);
-  camera.rotation.y = player.yaw;
-  camera.rotation.x = player.pitch + player.kick * 0.06;
+  const shk = camShake * camShake; // ease-out
+  camera.position.set(
+    player.x + (Math.random() - 0.5) * shk * 0.3,
+    player.y + Math.sin(player.bobPhase) * 0.045 + (Math.random() - 0.5) * shk * 0.25,
+    player.z + (Math.random() - 0.5) * shk * 0.3);
+  camera.rotation.y = player.yaw + (Math.random() - 0.5) * shk * 0.04;
+  camera.rotation.x = player.pitch + player.kick * 0.06 + (Math.random() - 0.5) * shk * 0.04;
 
   // viewmodel sprite: frame state, bob, sway, recoil
   const cw = weapons[currentWeapon];
@@ -1040,6 +1264,8 @@ function update(dt) {
   if (currentWeapon === 'shotgun') {
     if (cw.sinceFire < 0.12) vmf = 'fire';
     else if (cw.sinceFire > 0.28 && cw.sinceFire < 0.62) vmf = 'pump';
+  } else if (currentWeapon === 'pipebomb') {
+    if (cw.sinceFire < 0.45) vmf = 'fire'; // detonator hand after the throw
   } else if (cw.sinceFire < 0.09) vmf = 'fire';
   vmSetFrame(vm, vmf);
   const dk = Math.pow(0.002, dt);
@@ -1056,7 +1282,7 @@ function update(dt) {
     const near = dx * dx + dz * dz < (CELL * 1.7) ** 2;
     if (!d.opening && !d.secret && near && !d.sealed) {
       if (d.locked && !player.keycard) {
-        if (!d._warned || t - d._warned > 2.5) { msg('NEED RED KEYCARD'); beep(140, 0.15, 'square', 0.05); d._warned = t; }
+        if (!d._warned || t - d._warned > 2.5) { msg('NEED ' + KEY_NAME); beep(140, 0.15, 'square', 0.05); d._warned = t; }
       } else {
         d.opening = true; sfx.door();
         if (d.locked) msg('KEYCARD ACCEPTED', 1500);
@@ -1080,7 +1306,7 @@ function update(dt) {
     bossSealed = true;
     boss.aggroed = true;
     for (const d of doorObjs) if (d.locked) { d.sealed = true; d.opening = false; }
-    msg('THE SLUDGE KING AWAKENS', 3000);
+    msg('THE ' + (meta.bossName || 'SLUDGE KING') + ' AWAKENS', 3000);
     quip("That's one ugly mother-mopper.", true);
     sfx.boom();
   }
@@ -1102,68 +1328,111 @@ function update(dt) {
     n.mat.map = n.mat.emissiveMap = t < n.talkUntil ? npcTex.talk : npcTex.idle;
   }
 
-  // ---- prop billboards (barrels) ----
-  for (const b of billboards) b.lookAt(player.x, b.position.y, player.z);
+  // ---- explosive barrels (Y-billboard + fuse countdown) ----
+  for (const b of barrels) {
+    if (b.dead) continue;
+    b.mesh.lookAt(player.x, b.mesh.position.y, player.z);
+    if (b.fuse >= 0) {
+      b.fuse -= dt;
+      b.mesh.material.color.setRGB(2 + Math.sin(t * 40) * 1.5, 1, 1);
+      if (b.fuse <= 0) detonateBarrel(b);
+    }
+  }
 
   // ---- monsters ----
   for (const m of monsters) {
     m.mesh.lookAt(player.x, m.mesh.position.y, player.z); // Y-axis billboard
     if (m.dead) {
       m.mesh.userData.setFrame('die');
-      m.mesh.position.y = 0;
+      if (m.fly) m.mesh.position.y = Math.max(0.5, m.mesh.position.y - dt * 4); // shot-down drones drop
+      else m.mesh.position.y = 0;
       const mat = m.mesh.userData.sprite.material;
       if (m.type !== 'boss') mat.opacity = Math.max(0.55, (mat.opacity ?? 1) - dt * 0.3);
       continue;
     }
     m.cd -= dt;
     if (m.attackAnim > 0) m.attackAnim -= dt;
+    if (m.painT > 0) m.painT -= dt;
     if (m.hitFlash > 0) {
       m.hitFlash -= dt;
       m.mesh.userData.sprite.material.color.setRGB(4, 1.5, 1.5);
     } else {
       m.mesh.userData.sprite.material.color.setRGB(1, 1, 1);
     }
-    const dx = player.x - m.x, dz = player.z - m.z;
-    const dist = Math.hypot(dx, dz);
-    const seen = dist < m.aggro && los(m.x, m.z, player.x, player.z);
-    if (seen) m.aggroed = true;
-    if (!m.aggroed || player.dead) { m.mesh.position.set(m.x, 0, m.z); m.mesh.userData.setFrame('idle'); continue; }
 
-    // move toward player (stop at comfortable range for ranged attackers)
-    const wantRange = m.type === 'grunt' ? 7 : m.type === 'spitter' ? 9 : 3.5;
+    // infighting: a wounded monster chases/attacks the monster that hit it
+    let tx = player.x, tz = player.z, targetIsPlayer = true;
+    if (m.infight && !m.infight.dead) { tx = m.infight.x; tz = m.infight.z; targetIsPlayer = false; }
+    else m.infight = null;
+
+    const dx = tx - m.x, dz = tz - m.z;
+    const dist = Math.hypot(dx, dz) || 0.001;
+    const seen = targetIsPlayer ? (dist < m.aggro && los(m.x, m.z, player.x, player.z)) : los(m.x, m.z, tx, tz);
+    if (seen && targetIsPlayer) m.aggroed = true;
+    if ((!m.aggroed && !m.infight) || (targetIsPlayer && player.dead)) {
+      if (m.fly) { m.bob += dt * 2; m.mesh.position.set(m.x, 2.0 + Math.sin(m.bob) * 0.25, m.z); }
+      else m.mesh.position.set(m.x, 0, m.z);
+      m.mesh.userData.setFrame('idle');
+      continue;
+    }
+
+    // pain stun: freeze in place, show attack/idle, skip movement+attack
+    if (m.painT > 0) {
+      m.mesh.userData.setFrame('attack');
+      if (m.fly) { m.bob += dt * 4; m.mesh.position.y = 2.0 + Math.sin(m.bob) * 0.25; }
+      continue;
+    }
+
+    // movement
+    const wantRange = m.type === 'grunt' ? 7 : m.type === 'spitter' ? 9 : m.type === 'drone' ? 11 : 3.5;
     let moving = false;
+    const sp = m.speed * dt;
     if (dist > wantRange || !seen) {
-      const sp = m.speed * dt;
       tryMove(m, dx / dist * sp, dz / dist * sp, m.radius);
+      moving = true;
+    } else if (m.fly && seen) {
+      // drones strafe sideways at range to be annoying targets
+      const perp = { x: -dz / dist, z: dx / dist };
+      if (collide(m.x + perp.x * sp * m.strafe, m.z + perp.z * sp * m.strafe, m.radius)) m.strafe *= -1;
+      tryMove(m, perp.x * sp * m.strafe, perp.z * sp * m.strafe, m.radius);
       moving = true;
     }
     m.mesh.userData.setFrame(m.attackAnim > 0 ? 'attack' : moving ? 'walk' : 'idle');
-    m.bob += dt * 6;
-    m.mesh.position.set(m.x, Math.abs(Math.sin(m.bob)) * (moving ? 0.08 : 0.02), m.z);
+    m.bob += dt * (m.fly ? 3 : 6);
+    if (m.fly) m.mesh.position.set(m.x, 2.0 + Math.sin(m.bob) * 0.25, m.z);
+    else m.mesh.position.set(m.x, Math.abs(Math.sin(m.bob)) * (moving ? 0.08 : 0.02), m.z);
 
     // attack
     if (seen && m.cd <= 0 && dist < m.attackRange) {
       m.cd = m.attackCd * rand(0.85, 1.25);
       m.attackAnim = 0.45;
-      const dy = (player.y - 0.2) - 1.2;
+      const srcY = m.fly ? 2.0 : (m.type === 'boss' ? 2.2 : 1.3);
+      const dy = ((targetIsPlayer ? player.y - 0.2 : 1.2)) - srcY;
       const dir = new THREE.Vector3(dx, dy, dz).normalize();
+      const onHit = (amt) => { // route damage to player or the infight target
+        if (targetIsPlayer) hurtPlayer(amt, m.x, m.z);
+        else damageMonster(m.infight, amt, m.infight.x, 1.2, m.infight.z, false, m);
+      };
       if (m.type === 'grunt') {
-        // hitscan w/ distance-based miss chance
         beep(260, 0.08, 'square', 0.05, -100);
-        if (Math.random() < clamp(1 - dist / 28, 0.25, 0.9)) hurtPlayer(m.dmg);
-        else spawnSparks(player.x - dir.x + rand(-1, 1), rand(0.5, 2), player.z - dir.z + rand(-1, 1), 0xffaa44, 3);
+        if (Math.random() < clamp(1 - dist / 28, 0.25, 0.9)) onHit(m.dmg);
+        else spawnSparks(tx - dir.x + rand(-1, 1), rand(0.5, 2), tz - dir.z + rand(-1, 1), 0xffaa44, 3);
+        spawnTracer(new THREE.Vector3(m.x, srcY, m.z), tx, 1.2, tz, 0xff7744);
+      } else if (m.type === 'drone') {
+        sfx.spit();
+        spawnProjectile(m.x, srcY, m.z, dir, 22, m.dmg, true, droneProjMat, m);
       } else if (m.type === 'spitter') {
         sfx.spit();
-        spawnProjectile(m.x, 1.3, m.z, dir, 13, m.dmg, true, enemyProjMat);
+        spawnProjectile(m.x, srcY, m.z, dir, 13, m.dmg, true, enemyProjMat, m);
       } else {
         sfx.spit();
         for (const a of [-0.22, 0, 0.22]) {
           const d2 = dir.clone();
           const c = Math.cos(a), s = Math.sin(a);
           [d2.x, d2.z] = [d2.x * c - d2.z * s, d2.x * s + d2.z * c];
-          spawnProjectile(m.x, 2.2, m.z, d2, 15, m.dmg, true, bossProjMat);
+          spawnProjectile(m.x, srcY, m.z, d2, 15, m.dmg, true, bossProjMat, m);
         }
-        if (dist < 3.5) hurtPlayer(m.dmg * 1.5);
+        if (targetIsPlayer && dist < 3.5) hurtPlayer(m.dmg * 1.5, m.x, m.z);
       }
     }
   }
@@ -1181,16 +1450,32 @@ function update(dt) {
       spawnPuff(p.mesh.position.x, p.mesh.position.y, p.mesh.position.z, p.color, p.hostile ? 0.55 : 0.4, 0.22);
     }
     const px = p.mesh.position.x, py = p.mesh.position.y, pz = p.mesh.position.z;
-    let kill = p.life <= 0 || py < 0 || py > WALL_H ||
-               cellSolid(Math.floor(px / CELL), Math.floor(pz / CELL));
+    const pgx2 = Math.floor(px / CELL), pgz2 = Math.floor(pz / CELL);
+    let kill = p.life <= 0 || py < 0 || py > WALL_H;
+    if (!kill && cellSolid(pgx2, pgz2)) {
+      const b = barrelAt(pgx2, pgz2);
+      if (b) {
+        if (py < 2.2) { damageBarrel(b, p.dmg || 40); kill = true; }
+        // else: passes over the barrel
+      } else kill = true;
+    }
     if (!kill && p.hostile) {
       if ((px - player.x) ** 2 + (py - player.y + 0.5) ** 2 + (pz - player.z) ** 2 < 0.8) {
-        hurtPlayer(p.dmg); kill = true;
+        hurtPlayer(p.dmg, p.owner ? p.owner.x : undefined, p.owner ? p.owner.z : undefined); kill = true;
+      } else { // hostile shots can hit OTHER monsters → infighting
+        for (const m of monsters) {
+          if (m.dead || m === p.owner) continue;
+          const cy = m.type === 'boss' ? 1.8 : m.fly ? (m.mesh.position.y || 2) : 1.1;
+          const hr = m.radius + 0.3;
+          if ((px - m.x) ** 2 + (py - cy) ** 2 * 0.5 + (pz - m.z) ** 2 < hr * hr) {
+            damageMonster(m, p.dmg, px, py, pz, false, p.owner); kill = true; break;
+          }
+        }
       }
     } else if (!kill) {
       for (const m of monsters) {
         if (m.dead) continue;
-        const cy = m.type === 'boss' ? 1.8 : 1.1;
+        const cy = m.type === 'boss' ? 1.8 : m.fly ? (m.mesh.position.y || 2) : 1.1;
         const hr = m.radius + 0.3;
         if ((px - m.x) ** 2 + (py - cy) ** 2 * 0.5 + (pz - m.z) ** 2 < hr * hr) {
           damageMonster(m, p.dmg, px, py, pz); kill = true; break;
@@ -1240,9 +1525,89 @@ function update(dt) {
     if (d.life <= 0) { scene.remove(d.mesh); decals.splice(i, 1); }
   }
 
+  // ---- gore gibs (billboarded flesh, tumble + settle flat) ----
+  for (let i = goreGibs.length - 1; i >= 0; i--) {
+    const g = goreGibs[i];
+    if (!g.rest) {
+      g.vy -= 14 * dt;
+      g.mesh.position.x += g.vx * dt;
+      g.mesh.position.y += g.vy * dt;
+      g.mesh.position.z += g.vz * dt;
+      g.angle = (g.angle ?? 0) + g.spin * dt;
+      g.mesh.lookAt(player.x, g.mesh.position.y, player.z); // billboard while airborne
+      g.mesh.rotateZ(g.angle);                               // …and tumble
+      if (g.mesh.position.y <= 0.12) {
+        g.mesh.position.y = 0.12; g.rest = true;
+        g.mesh.rotation.set(-Math.PI / 2, 0, rand(0, TAU)); // lie flat on the floor
+      }
+    }
+    g.life -= dt;
+    if (g.life < 0.6) g.mesh.material.opacity = clamp(g.life / 0.6, 0, 1);
+    if (g.life <= 0) { scene.remove(g.mesh); goreGibs.splice(i, 1); }
+  }
+
+  // ---- pipe bombs (gravity, bounce, fuse → explode) ----
+  for (let i = pipeBombs.length - 1; i >= 0; i--) {
+    const pb = pipeBombs[i];
+    pb.vy -= 16 * dt;
+    let nx = pb.mesh.position.x + pb.vx * dt;
+    let nz = pb.mesh.position.z + pb.vz * dt;
+    let ny = pb.mesh.position.y + pb.vy * dt;
+    // wall bounce
+    if (cellSolid(Math.floor(nx / CELL), Math.floor(pb.mesh.position.z / CELL))) { pb.vx *= -0.5; nx = pb.mesh.position.x; }
+    if (cellSolid(Math.floor(pb.mesh.position.x / CELL), Math.floor(nz / CELL))) { pb.vz *= -0.5; nz = pb.mesh.position.z; }
+    if (ny < 0.16) { ny = 0.16; pb.vy *= -0.4; pb.vx *= 0.7; pb.vz *= 0.7; }
+    pb.mesh.position.set(nx, ny, nz);
+    pb.mesh.rotation.x += dt * 9; pb.mesh.rotation.y += dt * 7;
+    pb.blink += dt;
+    pb.mesh.material.emissiveIntensity = 0.4 + Math.abs(Math.sin(pb.blink * (1 + (2.2 - pb.fuse) * 3))) * 1.6;
+    pb.fuse -= dt;
+    if (pb.fuse <= 0) {
+      scene.remove(pb.mesh);
+      pipeBombs.splice(i, 1);
+      explode(pb.mesh.position.x, pb.mesh.position.y, pb.mesh.position.z);
+    }
+  }
+
+  // ---- explosion flash lights ----
+  for (let i = flashes.length - 1; i >= 0; i--) {
+    const f = flashes[i]; f.life -= dt;
+    f.light.intensity = Math.max(0, f.life / f.max) * 60;
+    if (f.life <= 0) { scene.remove(f.light); flashes.splice(i, 1); }
+  }
+
+  // ---- sludge damage: standing in toxic sludge hurts over time ----
+  player._sludgeT = (player._sludgeT ?? 0) - dt;
+  for (const s of sludgeDefs) {
+    if (pgx >= s.x1 && pgx <= s.x2 && pgy >= s.y1 && pgy <= s.y2 && player.onGround) {
+      if (player._sludgeT <= 0) { player._sludgeT = 0.5; hurtPlayer(4); }
+      break;
+    }
+  }
+
+  // ---- camera shake decay ----
+  camShake = Math.max(0, camShake - dt * 3);
+
   // ---- flickering lights ----
   for (const l of allLights) {
     if (l.userData.flicker) l.intensity = l.userData.base * (Math.random() < 0.06 ? rand(0.1, 0.4) : rand(0.85, 1.05));
+  }
+
+  // ---- music intensity tracks nearby combat ----
+  if (music) {
+    let danger = 0;
+    for (const m of monsters)
+      if (!m.dead && m.aggroed && Math.hypot(m.x - player.x, m.z - player.z) < 26) danger++;
+    const target = clamp(danger / 4, 0, 1);
+    music.intensity += (target - music.intensity) * dt * 1.5;
+    music.filt.frequency.value = 160 + music.intensity * 900;
+    music.master.gain.value = 0.05 + music.intensity * 0.04;
+    music.clangT -= dt;
+    if (music.clangT <= 0) { // sparse distant industrial clangs
+      music.clangT = rand(3, 9) - music.intensity * 2;
+      beep(rand(700, 1500), 0.5, 'triangle', 0.015, -400);
+      noise(0.35, 0.012, 350);
+    }
   }
   sludgeUniforms.uTime.value = t;
   exitPad.rotation.y += dt * (boss?.dead ? 2 : 0.3);
@@ -1253,14 +1618,78 @@ function update(dt) {
     gameEnded = true;
     sfx.win();
     document.exitPointerLock();
-    const secs = Math.round((performance.now() - player.startTime) / 1000);
-    const mm = String(Math.floor(secs / 60)), ss = String(secs % 60).padStart(2, '0');
-    document.getElementById('victory-stats').innerHTML =
-      `TIME ${mm}:${ss} &nbsp;·&nbsp; SCORE ${player.score} &nbsp;·&nbsp; KILLS ${player.kills}/${monsters.length} &nbsp;·&nbsp; SECRETS ${player.secrets}/1`;
-    document.getElementById('victory').classList.remove('hidden');
-    document.getElementById('resume').classList.add('hidden');
-    quip('Toxic sector? More like TOAST-ic sector.', true);
+    quip(meta.next ? 'Going down. Next stop: the core.' : 'Toxic sector? More like TOAST-ic sector.', true);
+    showEndScreen(true);
   }
+}
+
+// ============================== END SCREEN (stats / rank / transition) ==============================
+function showEndScreen(won) {
+  const secs = Math.round((performance.now() - player.startTime) / 1000);
+  const mm = String(Math.floor(secs / 60)), ss = String(secs % 60).padStart(2, '0');
+  const totalSecrets = doorObjs.filter(d => d.secret).length;
+  const rankEl = document.getElementById('end-rank');
+  const titleEl = document.getElementById('end-title');
+  const statsEl = document.getElementById('end-stats');
+  const bestEl = document.getElementById('end-best');
+  const goEl = document.getElementById('end-go');
+
+  let rank = 'F', rankColor = '#f44';
+  if (won) {
+    const killScore = player.kills / monsters.length;
+    const secretScore = totalSecrets ? player.secrets / totalSecrets : 1;
+    const timeScore = clamp((meta.parTime || 240) / Math.max(secs, 1), 0, 1);
+    const total = killScore * 0.5 + secretScore * 0.2 + timeScore * 0.3;
+    rank = total > 0.92 ? 'S' : total > 0.78 ? 'A' : total > 0.6 ? 'B' : total > 0.42 ? 'C' : 'D';
+    rankColor = { S: '#ffd700', A: '#6f6', B: '#6ff', C: '#fc3', D: '#f80' }[rank];
+  }
+  rankEl.textContent = rank;
+  rankEl.style.color = rankColor;
+  titleEl.textContent = won ? (meta.next ? `${meta.name} CLEANSED` : 'SECTOR SECURED — GAME COMPLETE') : 'YOU DIED';
+  titleEl.style.color = won ? '#6f6' : '#f44';
+  statsEl.innerHTML =
+    `TIME ${mm}:${ss} (par ${Math.floor((meta.parTime||240)/60)}:${String((meta.parTime||240)%60).padStart(2,'0')})<br>` +
+    `SCORE ${player.score} · KILLS ${player.kills}/${monsters.length} · SECRETS ${player.secrets}/${totalSecrets}`;
+
+  // localStorage best per level
+  let bestLine = '';
+  try {
+    const k = 'toxic_best_' + meta.id;
+    const prev = JSON.parse(localStorage.getItem(k) || 'null');
+    if (won && (!prev || player.score > prev.score)) {
+      localStorage.setItem(k, JSON.stringify({ score: player.score, secs, rank }));
+      bestLine = prev ? `NEW BEST! (was ${prev.score}, rank ${prev.rank})` : 'FIRST CLEAR RECORDED';
+    } else if (prev) {
+      bestLine = `BEST: ${prev.score} pts · rank ${prev.rank}`;
+    }
+  } catch (e) {}
+  bestEl.textContent = bestLine;
+
+  if (won && meta.next) {
+    goEl.textContent = 'CLICK TO DESCEND TO SECTOR ' + (meta.id + 1);
+    endAction = () => {
+      try {
+        sessionStorage.setItem('toxic_carry', JSON.stringify({
+          score: player.score,
+          shotgun: weapons.shotgun.owned ? { ammo: weapons.shotgun.ammo } : null,
+          plasma: weapons.plasma.owned ? { ammo: weapons.plasma.ammo } : null,
+          pipebomb: weapons.pipebomb.owned ? { ammo: weapons.pipebomb.ammo } : null,
+        }));
+      } catch (e) {}
+      const p = new URLSearchParams(location.search);
+      p.set('level', meta.next);
+      location.search = p.toString();
+    };
+  } else {
+    goEl.textContent = won ? 'CLICK TO PLAY AGAIN FROM SECTOR 1' : 'CLICK TO RETRY';
+    endAction = () => {
+      const p = new URLSearchParams(location.search);
+      if (won) p.delete('level'); // full restart from sector 1; retry restarts current level
+      location.search = p.toString() || '?';
+    };
+  }
+  document.getElementById('endscreen').classList.remove('hidden');
+  document.getElementById('resume').classList.add('hidden');
 }
 
 // ============================== POST-PROCESSING ==============================
@@ -1268,7 +1697,7 @@ function update(dt) {
 const composerRT = new THREE.WebGLRenderTarget(innerWidth, innerHeight, { samples: 4, type: THREE.HalfFloatType });
 const composer = new EffectComposer(renderer, composerRT);
 composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.55, 0.6, 0.82);
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.6, 0.7, 0.85);
 composer.addPass(bloom);
 const grainVignette = new ShaderPass({
   uniforms: { tDiffuse: { value: null }, uTime: { value: 0 }, uHurt: { value: 0 } },
@@ -1317,7 +1746,8 @@ function frame(now) {
 }
 requestAnimationFrame(frame);
 
-if (TEST) window.__game = { player, monsters, weapons, doorObjs, pickups, get locked() { return locked; }, fire, takePickup, hurtPlayer };
+if (TEST) window.__game = { player, monsters, weapons, doorObjs, pickups, barrels, pipeBombs, meta,
+  get locked() { return locked; }, fire, takePickup, hurtPlayer, explode, switchWeapon, showEndScreen };
 </script>
 </body>
 </html>
