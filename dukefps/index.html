@@ -882,6 +882,29 @@ function spawnGibs(x, y, z, color, count) {
   }
 }
 
+// ---- blood: toxic-green mist puffs + tiny droplets (replaces old cube gibs) ----
+const bloodMistTex = radialTex([[0, 'rgba(70,200,50,0.9)'], [0.4, 'rgba(40,130,30,0.55)'], [1, 'rgba(20,60,15,0)']]);
+const bloodMatBase = new THREE.SpriteMaterial({ map: bloodMistTex, transparent: true, depthWrite: false });
+const dropGeo = new THREE.SphereGeometry(0.022, 8, 6);
+const dropMat = new THREE.MeshBasicMaterial({ color: 0x1f7a14 });
+function spawnBlood(x, y, z, count = 2, big = false) {
+  for (let i = 0; i < count; i++) {
+    const m = bloodMatBase.clone(); m.opacity = 0.7;
+    const s = new THREE.Sprite(m);
+    s.position.set(x + rand(-0.15, 0.15), y + rand(-0.1, 0.25), z + rand(-0.15, 0.15));
+    s.scale.setScalar(rand(0.25, 0.45) * (big ? 1.8 : 1));
+    scene.add(s);
+    puffs.push({ spr: s, life: 0.35, max: 0.35, grow: 2.2, op: 0.7 });
+  }
+  for (let i = 0; i < count * 3; i++) {
+    const m = new THREE.Mesh(dropGeo, dropMat);
+    m.position.set(x, y, z);
+    m.scale.setScalar(rand(0.5, 1.1) * (big ? 1.5 : 1));
+    scene.add(m);
+    gibs.push({ mesh: m, vx: rand(-3.5, 3.5), vy: rand(1, 5), vz: rand(-3.5, 3.5), life: rand(0.35, 0.7) });
+  }
+}
+
 // ---- gore gibs (Nano Banana flesh chunks, Y-billboarded, tumbling) ----
 const goreTex = ['gib_0', 'gib_1', 'gib_2', 'gib_3'].map(spriteTex);
 const goreGibs = [];
@@ -1076,7 +1099,7 @@ function damageMonster(m, dmg, hx, hy, hz, splash = false, attacker = null) {
   if (attacker && attacker !== m) m.infight = attacker;
   sfx.mHit();
   if (!splash) spawnGore(hx ?? m.x, hy ?? 1.2, hz ?? m.z, 2);
-  spawnGibs(hx ?? m.x, hy ?? 1.2, hz ?? m.z, 0x33cc22, 3);
+  spawnBlood(hx ?? m.x, hy ?? 1.2, hz ?? m.z, 2);
   if (m.hp <= 0 && !m.dead) {
     m.dead = true;
     m.infight = null;
@@ -1089,7 +1112,7 @@ function damageMonster(m, dmg, hx, hy, hz, splash = false, attacker = null) {
     }
     sfx.mDie();
     spawnGore(m.x, 1.2, m.z, m.type === 'boss' ? 18 : 6, m.type === 'boss');
-    spawnGibs(m.x, 1.2, m.z, 0x33cc22, m.type === 'boss' ? 30 : 8);
+    spawnBlood(m.x, 1.2, m.z, m.type === 'boss' ? 8 : 4, m.type === 'boss');
     spawnBloodSplat(m.x, m.z);
     if (m.type === 'drone') explode(m.x, m.mesh.position.y || 2, m.z, { radius: 3, dmg: 25 });
     if (m.type === 'boss') {
@@ -1515,8 +1538,9 @@ function update(dt) {
   }
   for (let i = puffs.length - 1; i >= 0; i--) {
     const pf = puffs[i]; pf.life -= dt;
-    pf.spr.material.opacity = Math.max(0, pf.life / pf.max) * 0.6;
-    pf.spr.scale.multiplyScalar(Math.max(0, 1 - dt * 2));
+    pf.spr.material.opacity = Math.max(0, pf.life / pf.max) * (pf.op ?? 0.6);
+    if (pf.grow) pf.spr.scale.multiplyScalar(1 + pf.grow * dt);
+    else pf.spr.scale.multiplyScalar(Math.max(0, 1 - dt * 2));
     if (pf.life <= 0) { scene.remove(pf.spr); puffs.splice(i, 1); }
   }
   for (let i = decals.length - 1; i >= 0; i--) {
