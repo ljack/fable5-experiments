@@ -154,6 +154,8 @@ const sfx = {
   door:    () => beep(60, 0.5, 'sawtooth', 0.08, 60),
   spit:    () => beep(400, 0.15, 'sawtooth', 0.05, -250),
   boom:    () => { noise(0.5, 0.3, 500); beep(60, 0.6, 'sawtooth', 0.15, -30); },
+  rocket:  () => { noise(0.35, 0.28, 900); beep(75, 0.7, 'sawtooth', 0.14, -35); beep(150, 0.4, 'square', 0.05, 220); },
+  lock:    () => beep(1400, 0.05, 'square', 0.035),
   secret:  () => { [440, 554, 659, 880].forEach((f, i) => beep(f, 0.12, 'triangle', 0.08, 0, i * 0.09)); },
   win:     () => { [523, 659, 784, 1047].forEach((f, i) => beep(f, 0.22, 'square', 0.08, 0, i * 0.13)); },
 };
@@ -507,6 +509,7 @@ const ITEM_DEFS = { // a = aspect from processed PNGs, h = world height, glow co
   shotgun:  { a: 336/175, h: 0.55, glow: 0xffaa55 },
   plasma:   { a: 300/120, h: 0.5,  glow: 0x00ffee },
   pipebomb: { a: 358/256, h: 0.5,  glow: 0xff4422 },
+  bazooka:  { a: 527/256, h: 0.75, glow: 0xff7722 },
 };
 function makePickupMesh(kind) {
   const d = ITEM_DEFS[kind];
@@ -607,7 +610,7 @@ const npcObjs = npcDefs.map(nd => {
 const NPC_LINES = [
   "Whoa, easy with that thing! I just mop here, man.",
   "The mutants dragged the RED keycard into the green sludge hall, south of the big arena.",
-  "Psst… the west wall back in the spawn room sounds HOLLOW. Tap it with [E].",
+  "Psst… the west wall back in the spawn room sounds HOLLOW. Tap it with [E]. Word is somebody stashed a MEGA BAZOOKA back there.",
   "The Sludge King eats bullets for breakfast. Bring the plasma rifle from the east hall.",
   "Exit pad's in his lair. Glows green when he's toast. Now lemme mop in peace.",
 ];
@@ -618,6 +621,7 @@ const weapons = {
   shotgun: { name: 'BOOMSTICK',    dmg: 8,  cd: 0.85, ammo: 0, pellets: 7, spread: 0.07, viewmodel: null, owned: false },
   plasma:  { name: 'PLASMA RIFLE', dmg: 22, cd: 0.16, ammo: 0, pellets: 1, spread: 0.02, viewmodel: null, owned: false, projectile: true },
   pipebomb:{ name: 'PIPE BOMBS',   dmg: 0,  cd: 0.8,  ammo: 0, pellets: 1, spread: 0, viewmodel: null, owned: false, thrown: true },
+  bazooka: { name: 'MEGA BAZOOKA', dmg: 160, cd: 1.1, ammo: 0, pellets: 1, spread: 0, viewmodel: null, owned: false, rocket: true },
 };
 // Nano Banana first-person weapon sprites (idle/fire/pump frames)
 const VM_DEFS = {
@@ -625,15 +629,16 @@ const VM_DEFS = {
   shotgun: { frames: ['idle', 'fire', 'pump'], aspect: 390/512, flash: 0xffaa33, tracer: 0xffcc88 },
   plasma:  { frames: ['idle', 'fire'],         aspect: 448/512, flash: 0x33ffdd, tracer: 0x66ffee },
   pipebomb:{ frames: ['idle', 'fire'],         aspect: 512/512, flash: 0xffffff, tracer: 0xffffff },
+  bazooka: { frames: ['idle', 'fire'],         aspect: 448/512, flash: 0xffaa33, tracer: 0xffaa33 },
 };
 function makeViewmodel(kind) {
   const d = VM_DEFS[kind];
   d.tex = Object.fromEntries(d.frames.map(f => [f, spriteTex(`vm_${kind}_${f}`)]));
-  const H = 0.78;
+  const H = kind === 'bazooka' ? 1.1 : 0.78; // the bazooka is HUGE
   const mat = new THREE.MeshBasicMaterial({ map: d.tex.idle, transparent: true, depthTest: false, depthWrite: false, toneMapped: false });
   const m = new THREE.Mesh(new THREE.PlaneGeometry(H * d.aspect, H), mat);
   m.renderOrder = 999; // draw over everything, never clip into walls
-  m.position.set(0.17, -0.35, -1);
+  m.position.set(kind === 'bazooka' ? 0.12 : 0.17, kind === 'bazooka' ? -0.42 : -0.35, -1);
   m.visible = false;
   m.userData = { kind, mat, frame: 'idle' };
   camera.add(m);
@@ -650,6 +655,7 @@ weapons.pistol.viewmodel = makeViewmodel('pistol');
 weapons.shotgun.viewmodel = makeViewmodel('shotgun');
 weapons.plasma.viewmodel = makeViewmodel('plasma');
 weapons.pipebomb.viewmodel = makeViewmodel('pipebomb');
+weapons.bazooka.viewmodel = makeViewmodel('bazooka');
 let currentWeapon = 'pistol';
 weapons.pistol.viewmodel.visible = true;
 
@@ -675,6 +681,7 @@ addEventListener('keydown', e => {
   if (e.code === 'Digit2') switchWeapon('shotgun');
   if (e.code === 'Digit3') switchWeapon('plasma');
   if (e.code === 'Digit4') switchWeapon('pipebomb');
+  if (e.code === 'Digit5') switchWeapon('bazooka');
   if (e.code === 'KeyE') useKey();
   if (e.code === 'Space') e.preventDefault();
 });
@@ -709,7 +716,7 @@ try {
   const carry = JSON.parse(sessionStorage.getItem('toxic_carry') || 'null');
   if (carry) {
     player.score = carry.score | 0;
-    for (const k of ['shotgun', 'plasma', 'pipebomb']) {
+    for (const k of ['shotgun', 'plasma', 'pipebomb', 'bazooka']) {
       if (carry[k]) { weapons[k].owned = true; weapons[k].ammo = carry[k].ammo; }
     }
     sessionStorage.removeItem('toxic_carry');
@@ -973,15 +980,21 @@ function explode(x, y, z, opts = {}) {
   sfx.boom();
   spawnPuff(x, y, z, 0xffdd66, radius * 0.9, 0.35);
   spawnPuff(x, y, z, 0xff5522, radius * 1.3, 0.5);
-  spawnSparks(x, y, z, 0xffaa33, 18);
+  spawnSparks(x, y, z, 0xffaa33, opts.mega ? 36 : 18);
   spawnGibs(x, y, z, 0x553311, 10);
+  if (opts.mega) { // MEGA: blinding core, expanding shockwave ring, double flash
+    sfx.boom(); // twice as loud
+    spawnPuff(x, y, z, 0xffffff, radius * 0.55, 0.22);
+    spawnPuff(x, y + 1.2, z, 0xffcc88, radius * 1.7, 0.7);
+    spawnShockwave(x, z, radius);
+  }
   // flash light
-  const fl = new THREE.PointLight(0xffaa44, 60, radius * 4);
+  const fl = new THREE.PointLight(opts.mega ? 0xffd0aa : 0xffaa44, opts.mega ? 140 : 60, radius * (opts.mega ? 6 : 4));
   fl.position.set(x, y, z); scene.add(fl);
-  flashes.push({ light: fl, life: 0.22, max: 0.22 });
+  flashes.push({ light: fl, life: opts.mega ? 0.35 : 0.22, max: opts.mega ? 0.35 : 0.22, int: opts.mega ? 140 : 60 });
   // camera shake scaled by proximity
   const pd = Math.hypot(x - player.x, z - player.z);
-  camShake = Math.max(camShake, clamp(1 - pd / (radius * 3), 0, 1) * 0.9);
+  camShake = Math.max(camShake, clamp(1 - pd / (radius * 3), 0, 1) * (opts.mega ? 1.4 : 0.9));
   // splash damage: monsters
   for (const m of monsters) {
     if (m.dead) continue;
@@ -1010,6 +1023,22 @@ function detonateBarrel(b) {
 
 // transient explosion flash-lights
 const flashes = [];
+
+// expanding shockwave rings (mega explosions): flat additive ring racing across the floor
+const shockwaves = [];
+const shockTex = radialTex([[0, 'rgba(0,0,0,0)'], [0.55, 'rgba(0,0,0,0)'], [0.72, 'rgba(255,200,120,0.9)'],
+                            [0.85, 'rgba(255,120,40,0.55)'], [1, 'rgba(0,0,0,0)']]);
+function spawnShockwave(x, z, radius) {
+  const m = new THREE.Mesh(decalGeo, new THREE.MeshBasicMaterial({
+    map: shockTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    toneMapped: false, opacity: 0.95, side: THREE.DoubleSide,
+  }));
+  m.rotation.x = -Math.PI / 2;
+  m.position.set(x, 0.12, z);
+  m.scale.setScalar(0.5);
+  scene.add(m);
+  shockwaves.push({ mesh: m, life: 0.5, max: 0.5, maxScale: radius * 2.6 });
+}
 
 // hit a barrel with damage (hitscan/projectile/splash) — returns true if barrel was there
 function damageBarrel(b, dmg) {
@@ -1049,13 +1078,21 @@ function fire() {
   }
 
   muzzle.color.set(VM_DEFS[currentWeapon].flash);
-  muzzle.intensity = 30;
+  muzzle.intensity = currentWeapon === 'bazooka' ? 70 : 30;
   const mzl = muzzleWorld();
-  spawnPuff(mzl.x, mzl.y, mzl.z, VM_DEFS[currentWeapon].flash, 0.5, 0.08);
-  if (currentWeapon !== 'plasma') ejectCasing(currentWeapon === 'shotgun');
-  (currentWeapon === 'shotgun' ? sfx.shotgun : currentWeapon === 'plasma' ? sfx.plasma : sfx.pistol)();
+  spawnPuff(mzl.x, mzl.y, mzl.z, VM_DEFS[currentWeapon].flash, currentWeapon === 'bazooka' ? 1.3 : 0.5, 0.08);
+  if (currentWeapon !== 'plasma' && currentWeapon !== 'bazooka') ejectCasing(currentWeapon === 'shotgun');
+  (currentWeapon === 'shotgun' ? sfx.shotgun : currentWeapon === 'plasma' ? sfx.plasma :
+   currentWeapon === 'bazooka' ? sfx.rocket : sfx.pistol)();
 
-  if (w.projectile) {
+  if (w.rocket) { // MEGA BAZOOKA: launch a homing rocket at the locked target
+    const target = (lockTarget && !lockTarget.dead) ? lockTarget : autoAimTarget(fwd);
+    spawnRocket(player.x + fwd.x * 0.9, player.y - 0.2, player.z + fwd.z * 0.9, fwd, target);
+    spawnSparks(mzl.x, mzl.y, mzl.z, 0xffaa33, 8); // launch backblast
+    camShake = Math.max(camShake, 0.45);
+    player.kick = 2.2; // monster recoil
+    if (target) msg('TARGET LOCKED', 600);
+  } else if (w.projectile) {
     const dir = fwd.clone();
     dir.x += rand(-w.spread, w.spread); dir.y += rand(-w.spread, w.spread); dir.normalize();
     spawnProjectile(player.x + fwd.x * 0.7, player.y - 0.15, player.z + fwd.z * 0.7, dir, 32, w.dmg, false, plasmaProjMat);
@@ -1084,6 +1121,65 @@ function throwPipeBomb(fwd) {
     mesh: m, vx: fwd.x * 16, vy: 5 + fwd.y * 14, vz: fwd.z * 16,
     fuse: 2.2, blink: 0,
   });
+}
+
+// ---- MEGA BAZOOKA: auto-lock targeting + homing rockets ----
+const ROCKET_RANGE = 45;
+function autoAimTarget(fwd) {
+  let best = null, bestScore = -1;
+  for (const m of monsters) {
+    if (m.dead) continue;
+    const dx = m.x - player.x, dz = m.z - player.z;
+    const d = Math.hypot(dx, dz);
+    if (d > ROCKET_RANGE || d < 1.5) continue;
+    const dot = (dx / d) * fwd.x + (dz / d) * fwd.z;
+    if (dot < 0.5) continue; // ~60° lock cone
+    if (!los(player.x, player.z, m.x, m.z)) continue;
+    const score = dot * 2 - d / ROCKET_RANGE + (m.type === 'boss' ? 0.3 : 0);
+    if (score > bestScore) { bestScore = score; best = m; }
+  }
+  return best;
+}
+// pulsing lock-on reticle drawn over the locked target while the bazooka is out
+const lockTex = radialTex([[0, 'rgba(0,0,0,0)'], [0.62, 'rgba(0,0,0,0)'], [0.7, 'rgba(255,60,30,1)'],
+                           [0.82, 'rgba(255,170,60,0.9)'], [0.9, 'rgba(255,60,30,0)'], [1, 'rgba(0,0,0,0)']]);
+const lockSpr = new THREE.Sprite(new THREE.SpriteMaterial({
+  map: lockTex, color: 0xff5533, transparent: true, depthTest: false,
+  blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
+}));
+lockSpr.renderOrder = 998;
+lockSpr.visible = false;
+scene.add(lockSpr);
+let lockTarget = null, lockPulse = 0, prevLock = null;
+
+const rocketGeo = new THREE.CylinderGeometry(0.1, 0.12, 0.6, 10);
+rocketGeo.rotateX(Math.PI / 2); // align along +Z so lookAt() points it
+const rocketNose = new THREE.ConeGeometry(0.105, 0.26, 10);
+rocketNose.rotateX(Math.PI / 2);
+const rocketBodyMat = new THREE.MeshStandardMaterial({ color: 0x3a4a55, metalness: 0.8, roughness: 0.35 });
+const rocketNoseMat = new THREE.MeshBasicMaterial({ color: 0xff2222, toneMapped: false });
+function spawnRocket(x, y, z, dir, target) {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(rocketGeo, rocketBodyMat);
+  const nose = new THREE.Mesh(rocketNose, rocketNoseMat);
+  nose.position.z = 0.42;
+  g.add(body, nose);
+  // engine glow: white-hot core + big orange halo at the tail
+  const flame = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: sparkTex(0xffaa33), transparent: true, blending: THREE.AdditiveBlending,
+    depthWrite: false, toneMapped: false, opacity: 0.95,
+  }));
+  flame.position.z = -0.42; flame.scale.setScalar(0.55);
+  g.add(flame);
+  const light = new THREE.PointLight(0xff9933, 9, 14, 2);
+  light.position.z = -0.3;
+  g.add(light);
+  g.position.set(x, y, z);
+  scene.add(g);
+  const speed = 17;
+  projectiles.push({ mesh: g, vx: dir.x * speed, vy: dir.y * speed, vz: dir.z * speed,
+                     dmg: weapons.bazooka.dmg, hostile: false, life: 5, color: 0xffaa33,
+                     light: null, trailT: 0, owner: null, rocket: true, home: target, speed, flame });
 }
 
 function hitscan(dir, dmg, color) {
@@ -1264,6 +1360,7 @@ function takePickup(p) {
     case 'shotgun':  weapons.shotgun.owned = true; weapons.shotgun.ammo += 8; sfx.pickup(); msg('GOT THE BOOMSTICK  [2]', 3000); quip('Now THIS is a weapon!', true); switchWeapon('shotgun'); break;
     case 'plasma':   weapons.plasma.owned = true; weapons.plasma.ammo += 40; sfx.pickup(); msg('GOT THE PLASMA RIFLE  [3]', 3000); quip('Groovy.', true); switchWeapon('plasma'); break;
     case 'pipebomb': { const had = weapons.pipebomb.owned; weapons.pipebomb.owned = true; weapons.pipebomb.ammo += 3; sfx.pickup(); msg('+3 PIPE BOMBS  [4]', 3000); if (!had) { quip('Boom-mop time.', true); switchWeapon('pipebomb'); } break; }
+    case 'bazooka':  { const had = weapons.bazooka.owned; weapons.bazooka.owned = true; weapons.bazooka.ammo += 2; sfx.secret(); msg('MEGA BAZOOKA — 2 AUTO-LOCK ROCKETS  [5]', 3500); if (!had) { quip('Now we\'re talking MEGA.', true); switchWeapon('bazooka'); } else quip('+2 mega rockets!'); break; }
   }
   updateHud();
 }
@@ -1320,15 +1417,36 @@ function update(dt) {
     else if (cw.sinceFire > 0.28 && cw.sinceFire < 0.62) vmf = 'pump';
   } else if (currentWeapon === 'pipebomb') {
     if (cw.sinceFire < 0.45) vmf = 'fire'; // detonator hand after the throw
+  } else if (currentWeapon === 'bazooka') {
+    if (cw.sinceFire < 0.32) vmf = 'fire'; // long rocket-exhaust flash
   } else if (cw.sinceFire < 0.09) vmf = 'fire';
   vmSetFrame(vm, vmf);
   const dk = Math.pow(0.002, dt);
   swayX *= dk; swayY *= dk;
-  vm.position.x = 0.17 + Math.sin(player.bobPhase) * 0.02 + swayX;
-  vm.position.y = -0.35 - Math.abs(Math.sin(player.bobPhase)) * 0.016 + swayY
+  const vbx = currentWeapon === 'bazooka' ? 0.12 : 0.17;
+  const vby = currentWeapon === 'bazooka' ? -0.42 : -0.35;
+  vm.position.x = vbx + Math.sin(player.bobPhase) * 0.02 + swayX;
+  vm.position.y = vby - Math.abs(Math.sin(player.bobPhase)) * 0.016 + swayY
                   + player.kick * 0.06 + (vmf === 'pump' ? -0.06 : 0);
   vm.position.z = -1 + player.kick * 0.18;
   vm.rotation.z = swayX * 0.8 + (vmf === 'pump' ? 0.05 : 0);
+
+  // ---- bazooka auto-lock reticle: pulse over the current target ----
+  if (currentWeapon === 'bazooka' && !player.dead && !gameEnded) {
+    const fwdL = new THREE.Vector3();
+    camera.getWorldDirection(fwdL);
+    lockTarget = autoAimTarget(fwdL);
+    if (lockTarget && lockTarget !== prevLock) sfx.lock(); // lock-acquired blip
+    prevLock = lockTarget;
+    if (lockTarget) {
+      lockPulse += dt * 9;
+      const ly = lockTarget.type === 'boss' ? 2.6 : lockTarget.fly ? (lockTarget.mesh.position.y || 2) : 1.4;
+      lockSpr.position.set(lockTarget.x, ly, lockTarget.z);
+      lockSpr.scale.setScalar((lockTarget.type === 'boss' ? 2.6 : 1.5) * (1 + Math.sin(lockPulse) * 0.12));
+      lockSpr.material.opacity = 0.75 + Math.sin(lockPulse * 2) * 0.25;
+      lockSpr.visible = true;
+    } else lockSpr.visible = false;
+  } else { lockSpr.visible = false; lockTarget = null; prevLock = null; }
 
   // ---- doors ----
   for (const d of doorObjs) {
@@ -1494,14 +1612,38 @@ function update(dt) {
   // ---- projectiles ----
   for (let i = projectiles.length - 1; i >= 0; i--) {
     const p = projectiles[i];
+    if (p.rocket) {
+      if (p.home && !p.home.dead) { // steer hard onto the locked target
+        const t = p.home;
+        const ty = t.type === 'boss' ? 1.8 : t.fly ? (t.mesh.position.y || 2) : 1.2;
+        _spkV.set(t.x - p.mesh.position.x, ty - p.mesh.position.y, t.z - p.mesh.position.z).normalize();
+        const turn = Math.min(1, 5 * dt);
+        p.vx += (_spkV.x * p.speed - p.vx) * turn;
+        p.vy += (_spkV.y * p.speed - p.vy) * turn;
+        p.vz += (_spkV.z * p.speed - p.vz) * turn;
+        const sp = Math.hypot(p.vx, p.vy, p.vz) || 1; // keep speed constant while turning
+        p.vx *= p.speed / sp; p.vy *= p.speed / sp; p.vz *= p.speed / sp;
+      }
+      p.mesh.lookAt(p.mesh.position.x + p.vx, p.mesh.position.y + p.vy, p.mesh.position.z + p.vz);
+      p.flame.material.opacity = 0.7 + Math.random() * 0.3; // engine flicker
+      p.flame.scale.setScalar(rand(0.45, 0.7));
+    }
     p.mesh.position.x += p.vx * dt;
     p.mesh.position.y += p.vy * dt;
     p.mesh.position.z += p.vz * dt;
     p.life -= dt;
     p.trailT -= dt;
     if (p.trailT <= 0) {
-      p.trailT = 0.04;
-      spawnPuff(p.mesh.position.x, p.mesh.position.y, p.mesh.position.z, p.color, p.hostile ? 0.55 : 0.4, 0.22);
+      if (p.rocket) { // thick two-tone exhaust: white-hot core + orange billow
+        p.trailT = 0.022;
+        const m = p.mesh.position;
+        spawnPuff(m.x, m.y, m.z, 0xfff2cc, 0.32, 0.14);
+        spawnPuff(m.x + rand(-0.06, 0.06), m.y + rand(-0.06, 0.06), m.z + rand(-0.06, 0.06), 0xff8833, rand(0.5, 0.75), 0.45);
+        if (Math.random() < 0.3) spawnSparks(m.x, m.y, m.z, 0xffaa33, 1);
+      } else {
+        p.trailT = 0.04;
+        spawnPuff(p.mesh.position.x, p.mesh.position.y, p.mesh.position.z, p.color, p.hostile ? 0.55 : 0.4, 0.22);
+      }
     }
     const px = p.mesh.position.x, py = p.mesh.position.y, pz = p.mesh.position.z;
     const pgx2 = Math.floor(px / CELL), pgz2 = Math.floor(pz / CELL);
@@ -1530,15 +1672,20 @@ function update(dt) {
       for (const m of monsters) {
         if (m.dead) continue;
         const cy = m.type === 'boss' ? 1.8 : m.fly ? (m.mesh.position.y || 2) : 1.1;
-        const hr = m.radius + 0.3;
+        const hr = m.radius + (p.rocket ? 0.55 : 0.3); // rockets have a proximity fuse
         if ((px - m.x) ** 2 + (py - cy) ** 2 * 0.5 + (pz - m.z) ** 2 < hr * hr) {
-          damageMonster(m, p.dmg, px, py, pz); kill = true; break;
+          if (!p.rocket) damageMonster(m, p.dmg, px, py, pz); // rocket damage comes from the blast
+          kill = true; break;
         }
       }
     }
     if (kill) {
-      spawnSparks(px, py, pz, p.color, 5);
-      spawnPuff(px, py, pz, p.color, 0.9, 0.18);
+      if (p.rocket) {
+        explode(px, Math.max(py, 0.5), pz, { radius: 7.5, dmg: p.dmg, mega: true });
+      } else {
+        spawnSparks(px, py, pz, p.color, 5);
+        spawnPuff(px, py, pz, p.color, 0.9, 0.18);
+      }
       if (p.light) projLights--;
       scene.remove(p.mesh);
       projectiles.splice(i, 1);
@@ -1653,6 +1800,16 @@ function update(dt) {
     }
   }
 
+  // ---- shockwave rings: race outward, thin and fade ----
+  for (let i = shockwaves.length - 1; i >= 0; i--) {
+    const sw = shockwaves[i]; sw.life -= dt;
+    const t = 1 - Math.max(0, sw.life / sw.max);
+    const e = 1 - (1 - t) * (1 - t); // ease-out: fast start, slow finish
+    sw.mesh.scale.setScalar(0.5 + e * sw.maxScale);
+    sw.mesh.material.opacity = (1 - t) * 0.95;
+    if (sw.life <= 0) { scene.remove(sw.mesh); shockwaves.splice(i, 1); }
+  }
+
   // ---- explosion / spark flash lights ----
   for (let i = flashes.length - 1; i >= 0; i--) {
     const f = flashes[i]; f.life -= dt;
@@ -1758,6 +1915,7 @@ function showEndScreen(won) {
           shotgun: weapons.shotgun.owned ? { ammo: weapons.shotgun.ammo } : null,
           plasma: weapons.plasma.owned ? { ammo: weapons.plasma.ammo } : null,
           pipebomb: weapons.pipebomb.owned ? { ammo: weapons.pipebomb.ammo } : null,
+          bazooka: weapons.bazooka.owned ? { ammo: weapons.bazooka.ammo } : null,
         }));
       } catch (e) {}
       const p = new URLSearchParams(location.search);

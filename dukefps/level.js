@@ -67,10 +67,13 @@ export const monsters = [
   { type: 'boss',    x: 17, y: 30 },
 ];
 
-// kind: shotgun | plasma | keycard | health | shells | cells | gold | treasure | pipebomb
+// kind: shotgun | plasma | keycard | health | shells | cells | gold | treasure | pipebomb | bazooka
 export const items = [
   { kind: 'shotgun',  x: 18, y: 7 },
   { kind: 'plasma',   x: 38, y: 21 },
+  { kind: 'bazooka',  x: 6,  y: 11 },  // secret room: 2 auto-lock mega rockets
+  { kind: 'bazooka',  x: 24, y: 32 },  // boss arena: 2 more for the king
+
   { kind: 'keycard',  x: 10, y: 21 },
   { kind: 'pipebomb', x: 22, y: 9 },
   { kind: 'pipebomb', x: 31, y: 24 },
